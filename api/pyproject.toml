@@ -1,0 +1,60 @@
+[project]
+name = "graphwright-api"
+version = "0.1.0"
+description = "Runs API — the only thing client apps talk to: create runs, follow their progress, cancel them"
+requires-python = ">=3.13"
+dependencies = [
+    # The contract (task names, Redis keys), the graph catalog and lint. Editable path
+    # dependency: the API is a client of the engine, never the other way round. It
+    # never imports graphwright.queue.app (that is the worker).
+    "graphwright",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    # Runs, events, artifacts — no ORM, same thin style as the engine's storage/db.py
+    "asyncpg>=0.29",
+    # Enqueue / revoke (a Celery *client*: send_task by name)
+    "celery[redis]>=5.4",
+    # Live progress + SSE relay (redis.asyncio)
+    "redis>=5.0",
+    # Migrations. Alembic needs SQLAlchemy for its own plumbing; app code never uses it.
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+]
+
+[project.scripts]
+graphwright-api = "graphwright_api.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "fakeredis>=2.23",
+    "ruff>=0.6",
+]
+
+[tool.uv.sources]
+graphwright = { path = "../engine", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "graphwright_api"
+module-root = "src"

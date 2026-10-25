@@ -1,0 +1,53 @@
+[project]
+name = "graphwright-builder-api"
+version = "0.1.0"
+description = "Dev-only graph builder API — drives graphwright's GraphSession in a local headed browser"
+requires-python = ">=3.13"
+dependencies = [
+    # The engine, observer and browser code. Editable path dependency: the builder is a
+    # client of the engine, never the other way round, and the worker image never installs this.
+    "graphwright",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+builder-api = "builder_api.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.uv.sources]
+graphwright = { path = "../engine", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["builder_api"]
+known-third-party = ["graphwright"]
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "builder_api"
+module-root = "src"

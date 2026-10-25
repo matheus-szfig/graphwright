@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+/* Synthetic Flow design tokens (docs/design export, DESIGN.md) ------------------------ */
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* Values sampled from the design screens (dominant colour per region). */
+  --color-canvas: #0c1017;              /* infinite canvas */
+  --color-surface: #181b25;             /* navbar, docked rails */
+  --color-surface-low: #171a24;         /* rail panels */
+  --color-surface-container: #1c1f29;   /* cards, chips, floating HUD toolbars */
+  --color-surface-high: #262a34;        /* hover / active rows, zoom toolbar */
+  --color-surface-highest: #31353f;
+  --color-recess: #0a0e17;              /* inputs, fields, log wells */
+  --color-node: #181b25;                /* node card body */
+  --color-node-header: #1d212b;         /* node card header bar */
+  --color-minimap: #0d111a;
+  --color-edge-label: #0f1729;
+
+  --color-outline: #2f303d;             /* node borders */
+  --color-outline-variant: #23262f;     /* panel / card borders */
+  --color-outline-strong: #464554;
+
+  --color-on-surface: #dfe2ef;
+  --color-on-surface-variant: #c7c4d7;
+  --color-muted: #94a3b8;
+  --color-faint: #64748b;
+
+  --color-primary: #6366f1;             /* indigo — flow, selection */
+  --color-primary-soft: #c0c1ff;
+  --color-on-primary: #ffffff;
+  --color-secondary: #06b6d4;           /* cyan — splines, active */
+  --color-secondary-soft: #4cd7f6;
+  --color-tertiary: #a855f7;            /* purple — triggers / entry */
+  --color-tertiary-soft: #ddb7ff;
+  --color-success: #10b981;
+  --color-success-deep: #064e3b;
+  --color-warning: #f59e0b;
+  --color-danger: #f43f5e;
+  --color-danger-soft: #ffb4ab;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: var(--font-sans); font-size: 13px; line-height: 18px; -webkit-font-smoothing: antialiased; }
+.mono { font-family: var(--font-mono); }
+.label-caps { font-family: var(--font-mono); font-size: 10px; font-weight: 600; line-height: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* Material Symbols */
+.msi {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20;
+  user-select: none;
+}
+.msi.fill { font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 20; }
+
+/* Glass HUD (level 3) — the design's floating toolbars read as #1c1f29 */
+.hud {
+  background: rgba(28, 31, 41, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5);
+  border-radius: 0.5rem;
+}
+
+/* Scrollbars */
+* { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+
+/* React Flow ------------------------------------------------------------------------ */
+.react-flow, .react-flow.dark { background: var(--color-canvas) !important; }
+.react-flow__edge-path { stroke-width: 2.5; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--color-primary-soft) !important; }
+.react-flow__edge-text { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; fill: #c7c4d7; }
+.react-flow__edge-textbg { fill: var(--color-edge-label); stroke: var(--color-outline); stroke-width: 1; rx: 4; ry: 4; }
+.react-flow__controls { background: var(--color-surface-high); border: 1px solid rgba(255,255,255,0.06); border-radius: 0.5rem; box-shadow: 0 12px 32px -4px rgba(0,0,0,0.5); overflow: hidden; }
+.react-flow__controls button { background: transparent; border: none; border-bottom: 1px solid rgba(255,255,255,0.05); color: #a4a8b8; fill: #a4a8b8; width: 30px; height: 30px; }
+.react-flow__controls button:hover { background: var(--color-surface-highest); color: #dfe2ef; fill: #dfe2ef; }
+.react-flow__minimap { background: var(--color-minimap) !important; border: 1px solid var(--color-surface-high); border-radius: 0.5rem; }
+.react-flow__minimap svg { border-radius: 0.5rem; }
+.react-flow__handle { width: 10px; height: 10px; border-radius: 9999px; background: var(--color-node); border: 2px solid var(--color-secondary-soft); }
+.react-flow__handle:hover { background: var(--color-secondary-soft); }
+.react-flow__node.selected .node-card { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary), 0 8px 24px -4px rgba(99, 102, 241, 0.25); }
+.react-flow__attribution { background: transparent !important; color: #475569 !important; font-size: 9px; }
+
+@keyframes flow-dash { to { stroke-dashoffset: -24; } }
+.react-flow__edge.edge-active .react-flow__edge-path { stroke-dasharray: 6 6; animation: flow-dash 1s linear infinite; filter: drop-shadow(0 0 4px rgba(76, 215, 246, 0.5)); }
+
+@keyframes pulse-ring { 0%, 100% { box-shadow: 0 0 0 1px rgba(6,182,212,0.4); } 50% { box-shadow: 0 0 0 4px rgba(6,182,212,0.15); } }
+.node-running { animation: pulse-ring 1.6s ease-in-out infinite; }
+
+/* CodeMirror sits in a recessed well */
+.cm-editor { background: var(--color-recess) !important; border-radius: 0.25rem; }
+.cm-editor .cm-gutters { background: var(--color-recess) !important; border-right: 1px solid var(--color-outline-variant) !important; }
+.cm-editor.cm-focused { outline: none !important; }

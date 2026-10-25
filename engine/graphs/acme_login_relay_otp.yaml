@@ -1,0 +1,195 @@
+workflow: acme_login_relay_otp
+version: 1
+portal: acme-records
+risk: protected
+entry_url: '{base_url}/login'
+inputs:
+  base_url:
+    type: url
+    description: Where the Acme Records demo site is served
+    pii: false
+    default: http://demo-site:8090
+  username:
+    type: string
+    credential: username
+  password:
+    type: password
+    credential: password
+  relay_token:
+    type: password
+    description: bearer token for the OTP relay API
+    credential: relay_token
+# The code arrives through a relay (think SMS/e-mail gateway): ask for one, then
+# poll until it shows up. Both run when the verify page is on screen, not before.
+requests:
+  otp_request:
+    description: ask the relay to deliver a fresh code
+    method: POST
+    url: '{base_url}/api/otp/request'
+    headers:
+      Authorization: Bearer {relay_token}
+    json:
+      account: '{username}'
+    sensitive: false
+    extract:
+      requested:
+        json: data.requested
+  otp:
+    description: poll the relay until the code has arrived
+    url: '{base_url}/api/otp/latest'
+    query:
+      account: '{username}'
+    headers:
+      Authorization: Bearer {relay_token}
+    retry:
+      attempts: 5
+      backoff_s: [0.5, 1.0]
+      until_extracted: true
+    extract:
+      code:
+        json: data.code
+outputs:
+  account: acme_account_v1
+start: sign_in
+nodes:
+  sign_in:
+    intent: sign-in form — username and password
+    recognize:
+      all:
+        - url: re:^/login$
+        - visible: username_field
+        - visible: password_field
+    actions:
+      - fill:
+          target: username_field
+          value: '{username}'
+      - fill:
+          target: password_field
+          value: '{password}'
+      - click:
+          target: sign_in_button
+    transitions:
+      - to: invalid_credentials
+        when:
+          text: re:invalid username or password
+      - to: get_code
+        when:
+          url: re:^/login/verify
+  get_code:
+    intent: verification page — get a code from the relay before typing anything
+    recognize:
+      all:
+        - url: re:^/login/verify
+        - visible: code_field
+        - request:
+            name: otp
+            status: pending
+    actions:
+      # A failed trigger is not fatal on its own: polling still runs, and if no
+      # code shows up the transition below routes to otp_unavailable.
+      - fetch:
+          request: otp_request
+          on_error: continue
+      - fetch:
+          request: otp
+          into: otp
+          on_error: continue
+    transitions:
+      # Routes on whether the request filled the value, not on the page.
+      - to: otp_unavailable
+        when:
+          request:
+            name: otp
+            status: failed
+      - to: enter_code
+        when:
+          var:
+            name: otp.code
+            op: set
+  enter_code:
+    intent: verification page — type the relayed code
+    recognize:
+      all:
+        - url: re:^/login/verify
+        - visible: code_field
+    actions:
+      - fill:
+          target: code_field
+          value: '{vars.otp.code}'
+      - click:
+          target: verify_button
+    transitions:
+      - to: dashboard
+        when:
+          text: re:^welcome,
+          in: headings
+      - to: code_rejected
+        when:
+          text: re:invalid verification code
+  dashboard:
+    intent: account dashboard — read who is signed in and the recent activity
+    recognize:
+      all:
+        - url: re:^/account
+        - text: re:^welcome,
+          in: headings
+    actions:
+      - extract:
+          into: account
+          schema: acme_account_v1
+          fields:
+            welcome:
+              css: h1
+              required: true
+          tables:
+            activity:
+              match: re:recent activity
+    transitions:
+      - to: done
+  invalid_credentials:
+    terminal: failure
+    result:
+      status: invalid_credentials
+  otp_unavailable:
+    terminal: failure
+    result:
+      status: otp_unavailable
+  code_rejected:
+    terminal: failure
+    result:
+      status: code_rejected
+  done:
+    terminal: success
+targets:
+  username_field:
+    description: textbox “Username”
+    strategies:
+      - role: textbox
+        name: re:^username$
+      - role: textbox
+        dom_id: re:^username$
+  password_field:
+    description: password field “Password”
+    strategies:
+      - role: textbox
+        name: re:^password$
+      - role: textbox
+        dom_id: re:^password$
+  sign_in_button:
+    description: button “Sign in”
+    strategies:
+      - role: button
+        name: re:^sign in$
+        landmark: re:form
+  code_field:
+    description: textbox “Verification code”
+    strategies:
+      - role: textbox
+        name: re:^verification code$
+      - role: textbox
+        dom_id: re:^code$
+  verify_button:
+    description: button “Verify”
+    strategies:
+      - role: button
+        name: re:^verify$

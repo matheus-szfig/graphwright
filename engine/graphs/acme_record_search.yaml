@@ -1,0 +1,108 @@
+workflow: acme_record_search
+version: 1
+portal: acme-records
+entry_url: '{base_url}/search'
+inputs:
+  base_url:
+    type: url
+    description: Where the Acme Records demo site is served
+    pii: false
+    default: http://demo-site:8090
+  reference:
+    type: string
+    description: Record reference number, e.g. ACM-2024-000123 (any case)
+    pii: false
+  record_type:
+    type: string
+    description: Any type, Permit, License or Certificate
+    pii: false
+    default: Any type
+outputs:
+  record: acme_record_v1
+start: search_form
+nodes:
+  search_form:
+    intent: public search form — look a record up by reference number
+    recognize:
+      all:
+        - url: re:^/search
+        - visible: reference_field
+    actions:
+      - fill:
+          target: reference_field
+          value: '{reference}'
+          shape: upper
+      - select:
+          target: record_type
+          option: '{record_type}'
+      - click:
+          target: search_button
+    transitions:
+      - to: not_found
+        when:
+          text: re:^no record found
+      - to: record_detail
+        when:
+          url: re:^/records/
+  record_detail:
+    intent: record detail — read the summary and the events table
+    recognize:
+      all:
+        - url: re:^/records/
+        - text: re:^record acm-
+          in: headings
+    actions:
+      - extract:
+          into: record
+          schema: acme_record_v1
+          fields:
+            reference:
+              css: h1
+              pattern: re:(ACM-\d{4}-\d{6})
+              required: true
+            title:
+              css: '#record-title'
+              required: true
+            status:
+              css: '#record-status'
+            owner:
+              css: '#record-owner'
+          tables:
+            events:
+              header: re:^event$
+              required: true
+    postconditions:
+      - var:
+          name: record.title
+          op: set
+    transitions:
+      - to: done
+  not_found:
+    terminal: outcome
+    result:
+      status: not_found
+  done:
+    terminal: success
+targets:
+  reference_field:
+    description: textbox “Reference number”
+    strategies:
+      - role: textbox
+        name: re:^reference number$
+      - role: textbox
+        dom_id: re:^ref$
+  record_type:
+    description: combobox “Record type”
+    strategies:
+      - role: combobox
+        name: re:^record type$
+      - role: combobox
+        dom_id: re:^type$
+  search_button:
+    description: button “Search”
+    strategies:
+      - role: button
+        name: re:^search$
+        landmark: re:form
+      - role: button
+        name: re:^search$

@@ -1,0 +1,247 @@
+# graphwright — local stack.
+#
+#   redis      broker + result backend + live run progress (key + pub/sub)
+#   postgres   runs, run events, artifacts (schema: api/alembic)
+#   minio      per-domain browser session jars (S3 API)
+#   migrate    one-shot `alembic upgrade head`
+#   api        runs API — the only thing client apps talk to (/api/ behind nginx)
+#   worker     Celery worker: graph engine + stealth Chromium (internal network only)
+#   demo-site  "Acme Records", the demo web app the example graphs run against
+#   builder-*  dev-only graph builder (profile: builder)
+#   nginx      the only service that publishes a host port
+#
+# Per-app env comes from each app's .env.docker (`make setup-env`). Dev loop:
+# `docker compose watch` — Python services sync+restart, Vite syncs (HMR), and
+# dependency/build changes rebuild. Source and config are never bind-mounted;
+# volumes are for persistence only (postgres, minio) — the one exception is the
+# builder's graph folder, which is the point of the builder (its edits land in
+# the repo).
+#
+# Networks mirror a cloud layout: `edge` (what nginx reaches) and `internal`
+# (datastores, worker, demo-site). Host tools that need postgres/redis/minio/
+# demo-site directly: layer docker-compose.host-ports.yml (`make up-host-ports`).
+
+name: graphwright
+
+services:
+  nginx:
+    build:
+      context: ./nginx
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    environment:
+      BUILDER_API_UPSTREAM: ${BUILDER_API_UPSTREAM:-builder-api:8765}
+      BUILDER_WEB_UPSTREAM: ${BUILDER_WEB_UPSTREAM:-builder-web:5174}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_started
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./nginx/templates
+          target: /etc/nginx/templates
+        - action: rebuild
+          path: ./nginx/Dockerfile
+
+  redis:
+    image: redis:7-alpine
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    # Postgres 18 ships uuidv7() built in — no extension, no custom image.
+    image: postgres:18-alpine
+    networks: [internal]
+    environment:
+      POSTGRES_USER: graphwright
+      POSTGRES_PASSWORD: graphwright
+      POSTGRES_DB: graphwright
+    # PG 18 keeps data in a versioned subdirectory of /var/lib/postgresql.
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphwright"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # Chainguard's free MinIO build (no shell → no healthcheck; the worker creates
+    # buckets lazily, so service_started is enough).
+    image: cgr.dev/chainguard/minio:latest
+    networks: [internal]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - ./api/.env.docker
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: rebuild
+          path: ./api/alembic
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    command: ["uvicorn", "graphwright_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000",
+              "--root-path", "/api", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    env_file:
+      - ./api/.env.docker
+    networks: [edge, internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./api/src
+          target: /app/api/src
+          ignore: ["**/__pycache__/**"]
+        - action: sync+restart
+          path: ./engine/src
+          target: /app/engine/src
+          ignore: ["**/__pycache__/**"]
+        - action: sync
+          path: ./engine/graphs
+          target: /app/engine/graphs
+        - action: rebuild
+          path: ./api/pyproject.toml
+        - action: rebuild
+          path: ./api/uv.lock
+        - action: rebuild
+          path: ./api/Dockerfile
+
+  # Concurrency stays 1: each run holds a browser context; scale out with more
+  # containers (`docker compose up --scale worker=3`), not up. Recycling every 10
+  # tasks bounds Chromium memory growth.
+  worker:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    env_file:
+      - ./engine/.env.docker
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    develop:
+      watch:
+        # Celery loads tasks at boot and worker_process_init builds the browser pool,
+        # so source changes need a restart, not just a sync.
+        - action: sync+restart
+          path: ./engine/src
+          target: /app/src
+          ignore: ["**/__pycache__/**", "**/*.pyc"]
+        # Graphs are read per run — sync is enough.
+        - action: sync
+          path: ./engine/graphs
+          target: /app/graphs
+        - action: rebuild
+          path: ./engine/pyproject.toml
+        - action: rebuild
+          path: ./engine/uv.lock
+        - action: rebuild
+          path: ./engine/Dockerfile
+
+  demo-site:
+    build:
+      context: ./demo-site
+      dockerfile: Dockerfile
+    networks: [internal]
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./demo-site
+          target: /app
+
+  # --- graph builder — dev-only (profiles: [builder]) ---------------------------
+  # Inside Docker the browser is headless. For the normal loop (watching a headed
+  # browser) run it on the host: `make builder-local` (add NGINX=1 to route
+  # http://localhost:8080/builder/ to it).
+  builder-api:
+    profiles: ["builder"]
+    build:
+      context: .
+      dockerfile: builder-api/Dockerfile
+    environment:
+      BUILDER_HEADED: "false"
+      BUILDER_HOST: 0.0.0.0
+      BUILDER_GRAPHS_DIR: /app/engine/graphs
+      BUILDER_CORS_ORIGINS: http://localhost:${HTTP_PORT:-8080},http://localhost:5174
+    volumes:
+      # The builder's job is editing graphs; its writes must land in the repo.
+      - ./engine/graphs:/app/engine/graphs
+    networks: [edge, internal]
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./builder-api/src
+          target: /app/builder-api/src
+        - action: sync+restart
+          path: ./engine/src
+          target: /app/engine/src
+        - action: rebuild
+          path: ./builder-api/pyproject.toml
+        - action: rebuild
+          path: ./builder-api/Dockerfile
+
+  builder-web:
+    profiles: ["builder"]
+    build:
+      context: ./builder-web
+      dockerfile: Dockerfile
+    networks: [edge]
+    develop:
+      watch:
+        - action: sync
+          path: ./builder-web/src
+          target: /app/src
+        - action: sync
+          path: ./builder-web/index.html
+          target: /app/index.html
+        - action: sync
+          path: ./builder-web/vite.config.ts
+          target: /app/vite.config.ts
+        - action: rebuild
+          path: ./builder-web/package.json
+        - action: rebuild
+          path: ./builder-web/package-lock.json
+        - action: rebuild
+          path: ./builder-web/Dockerfile
+
+networks:
+  edge:
+  internal:
+
+volumes:
+  postgres_data:
+  minio_data:

@@ -1,0 +1,140 @@
+workflow: acme_account_login
+version: 1
+portal: acme-records
+risk: protected
+entry_url: '{base_url}/login'
+inputs:
+  base_url:
+    type: url
+    description: Where the Acme Records demo site is served
+    pii: false
+    default: http://demo-site:8090
+  username:
+    type: string
+    credential: username
+  password:
+    type: password
+    credential: password
+# The 2FA code is not an input: it would expire before the form appears. The
+# `otp` request produces it from the run's credential (its TOTP seed never leaves
+# the provider) at the moment the fill types it.
+requests:
+  otp:
+    kind: totp
+    description: current code from the credential's authenticator seed
+outputs:
+  account: acme_account_v1
+start: sign_in
+nodes:
+  sign_in:
+    intent: sign-in form — username and password
+    recognize:
+      all:
+        - url: re:^/login$
+        - visible: username_field
+        - visible: password_field
+    actions:
+      - fill:
+          target: username_field
+          value: '{username}'
+      - fill:
+          target: password_field
+          value: '{password}'
+      - click:
+          target: sign_in_button
+    transitions:
+      - to: invalid_credentials
+        when:
+          text: re:invalid username or password
+      - to: verify
+        when:
+          url: re:^/login/verify
+  verify:
+    intent: two-step verification — type the current code
+    recognize:
+      all:
+        - url: re:^/login/verify
+        - visible: code_field
+    actions:
+      - fill:
+          target: code_field
+          value: '{requests.otp.code}'
+      - click:
+          target: verify_button
+    transitions:
+      - to: dashboard
+        when:
+          text: re:^welcome,
+          in: headings
+      # A code that rolled over between fetch and submit is rejected once in a
+      # while; the node runs again with a fresh code (max_visits bounds it).
+      - to: verify
+        when:
+          text: re:invalid verification code
+    max_visits: 2
+    on_fail: code_rejected
+  dashboard:
+    intent: account dashboard — read who is signed in and the recent activity
+    recognize:
+      all:
+        - url: re:^/account
+        - text: re:^welcome,
+          in: headings
+    actions:
+      - extract:
+          into: account
+          schema: acme_account_v1
+          fields:
+            welcome:
+              css: h1
+              required: true
+            user:
+              css: '#account-user'
+          tables:
+            activity:
+              match: re:recent activity
+    transitions:
+      - to: done
+  invalid_credentials:
+    terminal: failure
+    result:
+      status: invalid_credentials
+  code_rejected:
+    terminal: failure
+    result:
+      status: code_rejected
+  done:
+    terminal: success
+targets:
+  username_field:
+    description: textbox “Username”
+    strategies:
+      - role: textbox
+        name: re:^username$
+      - role: textbox
+        dom_id: re:^username$
+  password_field:
+    description: password field “Password”
+    strategies:
+      - role: textbox
+        name: re:^password$
+      - role: textbox
+        dom_id: re:^password$
+  sign_in_button:
+    description: button “Sign in”
+    strategies:
+      - role: button
+        name: re:^sign in$
+        landmark: re:form
+  code_field:
+    description: textbox “Verification code”
+    strategies:
+      - role: textbox
+        name: re:^verification code$
+      - role: textbox
+        dom_id: re:^code$
+  verify_button:
+    description: button “Verify”
+    strategies:
+      - role: button
+        name: re:^verify$

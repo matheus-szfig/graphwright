@@ -1,0 +1,419 @@
+{
+ "url": "https://portal.test/cases/open.do?conversationId=xyz",
+ "portal": "portal.test",
+ "route": "/cases/open.do ?conversationId",
+ "title": "Case lookup",
+ "lang": "en-GB",
+ "ready": "complete",
+ "page_type": null,
+ "frames": [
+  {
+   "index": 0,
+   "url": "https://portal.test/cases/open.do?conversationId=xyz",
+   "route": "/cases/open.do ?conversationId",
+   "parent": null
+  },
+  {
+   "index": 1,
+   "url": "https://portal.test/child.html",
+   "route": "/child.html",
+   "parent": 0
+  }
+ ],
+ "alerts": [
+  "No information is available for the given parameters."
+ ],
+ "headings": [
+  {
+   "level": 1,
+   "text": "Case lookup — first instance",
+   "frame": 0
+  },
+  {
+   "level": 2,
+   "text": "Docket entries",
+   "frame": 1
+  }
+ ],
+ "elements": [
+  {
+   "id": "e1",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Home",
+   "value": null,
+   "href": "/home",
+   "options": [],
+   "states": [],
+   "landmark": "nav",
+   "nearby": [],
+   "bbox": {
+    "x": 0,
+    "y": 0,
+    "w": 43,
+    "h": 17
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e2",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Help",
+   "value": null,
+   "href": "/help",
+   "options": [],
+   "states": [],
+   "landmark": "nav",
+   "nearby": [],
+   "bbox": {
+    "x": 43,
+    "y": 0,
+    "w": 33,
+    "h": 17
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e3",
+   "frame": 0,
+   "role": "combobox",
+   "tag": "select",
+   "dom_id": "searchBy",
+   "name": "",
+   "value": "Party name",
+   "href": null,
+   "options": [
+    "Case number",
+    "Party name",
+    "Party document"
+   ],
+   "states": [],
+   "landmark": "table",
+   "nearby": [
+    "Search by"
+   ],
+   "bbox": {
+    "x": 118,
+    "y": 124,
+    "w": 116,
+    "h": 19
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e4",
+   "frame": 0,
+   "role": "textbox",
+   "tag": "input",
+   "dom_id": "caseNumberField",
+   "name": "",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [
+    "required"
+   ],
+   "landmark": "table",
+   "nearby": [
+    "Case number"
+   ],
+   "bbox": {
+    "x": 118,
+    "y": 157,
+    "w": 177,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e5",
+   "frame": 0,
+   "role": "checkbox",
+   "tag": "input",
+   "dom_id": "unified",
+   "name": "Unified",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [
+    "checked"
+   ],
+   "landmark": "table",
+   "nearby": [],
+   "bbox": {
+    "x": 122,
+    "y": 195,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e6",
+   "frame": 0,
+   "role": "radio",
+   "tag": "input",
+   "dom_id": "format0",
+   "name": "Standard number",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [
+    "checked"
+   ],
+   "landmark": "table",
+   "nearby": [
+    "Format"
+   ],
+   "bbox": {
+    "x": 123,
+    "y": 229,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e7",
+   "frame": 0,
+   "role": "radio",
+   "tag": "input",
+   "dom_id": "format1",
+   "name": "Free text",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "table",
+   "nearby": [
+    "Format",
+    "Standard number"
+   ],
+   "bbox": {
+    "x": 272,
+    "y": 229,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e8",
+   "frame": 0,
+   "role": "radio",
+   "tag": "input",
+   "dom_id": "format2",
+   "name": "Loose text",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "table",
+   "nearby": [
+    "Format",
+    "Standard number Free text"
+   ],
+   "bbox": {
+    "x": 361,
+    "y": 229,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e9",
+   "frame": 0,
+   "role": "radio",
+   "tag": "input",
+   "dom_id": null,
+   "name": "Personal",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [
+    "checked"
+   ],
+   "landmark": "table",
+   "nearby": [
+    "Party document"
+   ],
+   "bbox": {
+    "x": 81,
+    "y": 313,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e10",
+   "frame": 0,
+   "role": "radio",
+   "tag": "input",
+   "dom_id": null,
+   "name": "Company",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "table",
+   "nearby": [
+    "Personal",
+    "Party document"
+   ],
+   "bbox": {
+    "x": 179,
+    "y": 313,
+    "w": 13,
+    "h": 13
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e11",
+   "frame": 0,
+   "role": "textbox",
+   "tag": "input",
+   "dom_id": "partyDocument",
+   "name": "Party document",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "table",
+   "nearby": [],
+   "bbox": {
+    "x": 8,
+    "y": 330,
+    "w": 177,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e12",
+   "frame": 0,
+   "role": "button",
+   "tag": "input",
+   "dom_id": "searchCasesButton",
+   "name": "Search",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "table",
+   "nearby": [],
+   "bbox": {
+    "x": 118,
+    "y": 365,
+    "w": 58,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e13",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Terms of use",
+   "value": null,
+   "href": "/terms",
+   "options": [],
+   "states": [],
+   "landmark": "footer",
+   "nearby": [],
+   "bbox": {
+    "x": 0,
+    "y": 480,
+    "w": 92,
+    "h": 17
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "f1e1",
+   "frame": 1,
+   "role": "textbox",
+   "tag": "input",
+   "dom_id": "filter",
+   "name": "Search entries",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "fieldset#Filter",
+   "nearby": [
+    "Filter"
+   ],
+   "bbox": {
+    "x": 16,
+    "y": 90,
+    "w": 177,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "f1e2",
+   "frame": 1,
+   "role": "button",
+   "tag": "button",
+   "dom_id": "apply",
+   "name": "Apply",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "fieldset#Filter",
+   "nearby": [
+    "Filter"
+   ],
+   "bbox": {
+    "x": 20,
+    "y": 120,
+    "w": 49,
+    "h": 21
+   },
+   "in_viewport": true
+  }
+ ],
+ "tables": [
+  {
+   "id": "e14",
+   "frame": 0,
+   "name": null,
+   "headers": [
+    "Search by",
+    "Case number Party name Party …"
+   ],
+   "rows": 6
+  },
+  {
+   "id": "e15",
+   "frame": 0,
+   "name": "Cases",
+   "headers": [
+    "Number",
+    "Class",
+    "Subject"
+   ],
+   "rows": 2
+  }
+ ],
+ "stats": {
+  "candidates": 17,
+  "hidden": 2,
+  "kept": 15,
+  "frames": 2,
+  "extract_ms": 0.0,
+  "total_ms": 0.0
+ }
+}

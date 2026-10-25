@@ -1,0 +1,143 @@
+{
+ "url": "http://demo-site:8090/login/verify",
+ "portal": "demo-site",
+ "route": "/login/verify",
+ "title": "Two-step verification · Acme Records",
+ "lang": "en",
+ "ready": "complete",
+ "page_type": null,
+ "frames": [
+  {
+   "index": 0,
+   "url": "http://demo-site:8090/login/verify",
+   "route": "/login/verify",
+   "parent": null
+  }
+ ],
+ "alerts": [],
+ "headings": [
+  {
+   "level": 1,
+   "text": "Two-step verification",
+   "frame": 0
+  }
+ ],
+ "elements": [
+  {
+   "id": "e1",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Acme Records",
+   "value": null,
+   "href": "/",
+   "options": [],
+   "states": [],
+   "landmark": "header",
+   "nearby": [],
+   "bbox": {
+    "x": 24,
+    "y": 12,
+    "w": 119,
+    "h": 24
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e2",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Search records",
+   "value": null,
+   "href": "/search",
+   "options": [],
+   "states": [],
+   "landmark": "nav#Main",
+   "nearby": [],
+   "bbox": {
+    "x": 167,
+    "y": 14,
+    "w": 104,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e3",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Sign in",
+   "value": null,
+   "href": "/login",
+   "options": [],
+   "states": [],
+   "landmark": "nav#Main",
+   "nearby": [],
+   "bbox": {
+    "x": 284,
+    "y": 14,
+    "w": 48,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e4",
+   "frame": 0,
+   "role": "textbox",
+   "tag": "input",
+   "dom_id": "code",
+   "name": "Verification code",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [
+    "required"
+   ],
+   "landmark": "form#verify",
+   "nearby": [],
+   "bbox": {
+    "x": 260,
+    "y": 244,
+    "w": 300,
+    "h": 33
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e5",
+   "frame": 0,
+   "role": "button",
+   "tag": "button",
+   "dom_id": null,
+   "name": "Verify",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "form#verify",
+   "nearby": [],
+   "bbox": {
+    "x": 260,
+    "y": 293,
+    "w": 74,
+    "h": 33
+   },
+   "in_viewport": true
+  }
+ ],
+ "tables": [],
+ "stats": {
+  "candidates": 5,
+  "hidden": 0,
+  "kept": 5,
+  "frames": 1,
+  "extract_ms": 0.0,
+  "total_ms": 0.0
+ }
+}

@@ -1,0 +1,38 @@
+# Tiny graph for the API tests — never run in a browser here.
+workflow: fixture_search
+version: 3
+portal: fixture
+entry_url: "https://example.test/search"
+inputs:
+  query:
+    type: string
+    pii: false
+  limit:
+    type: number
+    pii: false
+    required: false
+    default: 10
+  password:
+    type: password
+    credential: password
+    required: false
+start: search
+nodes:
+  search:
+    intent: the search form
+    recognize:
+      visible: search_box
+    actions:
+      - fill:
+          target: search_box
+          value: "{query}"
+    transitions:
+      - to: done
+  done:
+    terminal: success
+targets:
+  search_box:
+    description: search box
+    strategies:
+      - role: textbox
+        name: "re:search"

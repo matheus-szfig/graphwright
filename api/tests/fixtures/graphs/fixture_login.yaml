@@ -1,0 +1,36 @@
+# Needs a credential: the API refuses runs without credential_ref.
+workflow: fixture_login
+portal: fixture
+inputs:
+  username:
+    credential: username
+  password:
+    type: password
+    credential: password
+start: login
+nodes:
+  login:
+    recognize:
+      visible: user_box
+    actions:
+      - fill:
+          target: user_box
+          value: "{username}"
+      - fill:
+          target: password_box
+          value: "{password}"
+    transitions:
+      - to: done
+  done:
+    terminal: success
+targets:
+  user_box:
+    description: username field
+    strategies:
+      - role: textbox
+        name: "re:user"
+  password_box:
+    description: password field
+    strategies:
+      - role: textbox
+        name: "re:password"

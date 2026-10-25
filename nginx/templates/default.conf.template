@@ -1,0 +1,82 @@
+# Reverse proxy — the stack's only public entry point.
+#
+#   /api/*          → api:8000                 runs API (prefix stripped; uvicorn --root-path /api)
+#   /builder/api/*  → ${BUILDER_API_UPSTREAM}  dev-only graph builder API (prefix stripped)
+#   /builder/*      → ${BUILDER_WEB_UPSTREAM}  dev-only graph builder UI (Vite, base /builder/)
+#   /               → a small index pointing at the above
+#
+# This file is an nginx *template*: the image runs envsubst on
+# /etc/nginx/templates/*.template at startup. Only ${UPPER_CASE} variables present
+# in the container environment are substituted; nginx's own $vars are untouched.
+#
+# The builder upstreams are env-configurable so the builder can run on the host
+# with a headed browser (BUILDER_API_UPSTREAM=host.docker.internal:8765). With the
+# `builder` profile off and nothing on the host, those locations 502.
+#
+# Upstreams resolve per request through Docker's DNS: `docker compose watch`
+# recreates containers with new IPs, and it lets nginx boot before them.
+
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 10m;
+
+    # Keep every proxy_set_header here: a location that sets even one stops
+    # inheriting all of these.
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $connection_upgrade;
+
+    location = / {
+        default_type text/plain;
+        return 200 "graphwright\n\n  /api/docs      runs API (OpenAPI)\n  /builder/      graph builder (dev profile)\n";
+    }
+
+    location = /api {
+        return 308 /api/;
+    }
+
+    location /api/ {
+        set $api http://api:8000;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $api;
+        # Server-Sent Events (/runs/{id}/stream): no buffering, long reads.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
+    # --- graph builder (dev-only, standalone app) ---------------------------
+
+    location = /builder {
+        return 308 /builder/;
+    }
+
+    location /builder/api/ {
+        set $builder_api http://${BUILDER_API_UPSTREAM};
+        rewrite ^/builder/api/(.*)$ /$1 break;
+        proxy_pass $builder_api;
+        # The events websocket, and run() calls that drive a browser.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location /builder/ {
+        set $builder_web http://${BUILDER_WEB_UPSTREAM};
+        proxy_pass $builder_web;
+        proxy_read_timeout 1h;
+    }
+}

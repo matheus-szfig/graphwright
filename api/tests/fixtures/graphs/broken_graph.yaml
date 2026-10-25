@@ -1,0 +1,12 @@
+# Validates but does not lint: the transition points nowhere.
+workflow: broken_graph
+portal: fixture
+start: a
+nodes:
+  a:
+    recognize:
+      always: true
+    transitions:
+      - to: nowhere
+  done:
+    terminal: success

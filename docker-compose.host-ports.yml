@@ -1,0 +1,27 @@
+# Opt-in override: publishes infra on the host's loopback for tools that run
+# outside docker (engine/api tests against the dev DB, `graphwright watch`, a
+# worker started with `uv run celery …`, the headed builder reaching demo-site).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d
+#   (or: make up-host-ports)
+#
+# Bound to 127.0.0.1 only. Ports match what `make setup-env-local` writes.
+
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  minio:
+    # 9000 is often taken on dev machines, hence 9900/9901.
+    ports:
+      - "127.0.0.1:9900:9000"   # S3 API
+      - "127.0.0.1:9901:9001"   # console
+
+  demo-site:
+    ports:
+      - "127.0.0.1:8090:8090"

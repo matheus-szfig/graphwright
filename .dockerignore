@@ -1,0 +1,16 @@
+# Root build context — used by images that need more than one app (api/ and
+# builder-api/ depend on engine/). Keeps the context small.
+.git
+docs
+**/.venv
+**/node_modules
+**/dist
+**/.vite
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.env
+**/.env.*
+!**/.env.example

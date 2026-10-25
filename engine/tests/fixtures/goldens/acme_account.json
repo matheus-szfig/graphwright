@@ -1,0 +1,131 @@
+{
+ "url": "http://demo-site:8090/account",
+ "portal": "demo-site",
+ "route": "/account",
+ "title": "My account · Acme Records",
+ "lang": "en",
+ "ready": "complete",
+ "page_type": null,
+ "frames": [
+  {
+   "index": 0,
+   "url": "http://demo-site:8090/account",
+   "route": "/account",
+   "parent": null
+  }
+ ],
+ "alerts": [],
+ "headings": [
+  {
+   "level": 1,
+   "text": "Welcome, Demo User",
+   "frame": 0
+  }
+ ],
+ "elements": [
+  {
+   "id": "e1",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Acme Records",
+   "value": null,
+   "href": "/",
+   "options": [],
+   "states": [],
+   "landmark": "header",
+   "nearby": [],
+   "bbox": {
+    "x": 24,
+    "y": 12,
+    "w": 119,
+    "h": 24
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e2",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "Search records",
+   "value": null,
+   "href": "/search",
+   "options": [],
+   "states": [],
+   "landmark": "nav#Main",
+   "nearby": [],
+   "bbox": {
+    "x": 167,
+    "y": 14,
+    "w": 104,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e3",
+   "frame": 0,
+   "role": "link",
+   "tag": "a",
+   "dom_id": null,
+   "name": "My account",
+   "value": null,
+   "href": "/account",
+   "options": [],
+   "states": [],
+   "landmark": "nav#Main",
+   "nearby": [],
+   "bbox": {
+    "x": 284,
+    "y": 14,
+    "w": 82,
+    "h": 21
+   },
+   "in_viewport": true
+  },
+  {
+   "id": "e4",
+   "frame": 0,
+   "role": "button",
+   "tag": "button",
+   "dom_id": null,
+   "name": "Sign out",
+   "value": null,
+   "href": null,
+   "options": [],
+   "states": [],
+   "landmark": "form",
+   "nearby": [],
+   "bbox": {
+    "x": 260,
+    "y": 358,
+    "w": 91,
+    "h": 33
+   },
+   "in_viewport": true
+  }
+ ],
+ "tables": [
+  {
+   "id": "e5",
+   "frame": 0,
+   "name": "Recent activity",
+   "headers": [
+    "Date",
+    "Activity"
+   ],
+   "rows": 2
+  }
+ ],
+ "stats": {
+  "candidates": 4,
+  "hidden": 0,
+  "kept": 4,
+  "frames": 1,
+  "extract_ms": 0.0,
+  "total_ms": 0.0
+ }
+}

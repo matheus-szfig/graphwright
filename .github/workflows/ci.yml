@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run graphwright lint
+      - run: uv run pytest
+
+  engine-browser:
+    # Real Chromium against demo-site: the observer, the example graphs end to end.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest
+        env:
+          GW_BROWSER_TESTS: "1"
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: graphwright
+          POSTGRES_PASSWORD: graphwright
+          POSTGRES_DB: graphwright_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U graphwright" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      POSTGRES_DSN: postgresql://graphwright:graphwright@localhost:5432/graphwright_test
+      ENV: test
+      DB_PASSWORD_WORKER: graphwright_worker
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run alembic upgrade head
+      - run: uv run pytest
+
+  builder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: builder-web/package-lock.json
+      - run: uv sync --frozen
+        working-directory: builder-api
+      - run: uv run ruff check
+        working-directory: builder-api
+      - run: uv run pytest
+        working-directory: builder-api
+      - run: npm ci
+        working-directory: builder-web
+      - run: npm run typecheck
+        working-directory: builder-web
+      - run: npm run build
+        working-directory: builder-web
+
+  compose:
+    # The stack definition parses and every image builds.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/setup_env.py
+      - run: docker compose config -q
+      - run: docker compose --profile builder build

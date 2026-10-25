@@ -1,0 +1,89 @@
+workflow: acme_record_search
+version: 1
+portal: acme-records
+entry_url: https://records.acme.example/search
+inputs:
+  reference:
+    type: string
+    description: record reference, e.g. ACM-2024-000123
+    pii: false
+start: search_form
+nodes:
+  search_form:
+    intent: search for a record by its reference
+    recognize:
+      url: re:/search$
+    actions:
+      - fill:
+          target: reference_field
+          value: '{reference}'
+          shape: upper
+      - click:
+          target: search_button
+    transitions:
+      - to: record_detail
+        when:
+          url: re:/records/
+      - to: not_found
+        when:
+          text: No record found
+      - to: blocked
+        when:
+          text: Too many requests
+      - to: results
+        when:
+          visible: results_table
+  results:
+    intent: several matches — open the first one
+    recognize:
+      visible: results_table
+    actions:
+      - click:
+          target: first_result
+    transitions:
+      - to: record_detail
+        when:
+          url: re:/records/
+  record_detail:
+    intent: read the record
+    recognize:
+      url: re:/records/
+    actions:
+      - extract:
+          into: record
+          fields:
+            title:
+              css: h1
+    transitions:
+      - to: done
+  not_found:
+    terminal: outcome
+    result:
+      status: not_found
+  blocked:
+    terminal: failure
+  done:
+    terminal: success
+outputs:
+  record: record
+targets:
+  reference_field:
+    description: the reference search box
+    strategies:
+      - role: textbox
+        name: re:^Reference
+      - dom_id: re:^reference$
+  search_button:
+    description: the Search button
+    strategies:
+      - role: button
+        name: re:^Search$
+  results_table:
+    description: the results table
+    strategies:
+      - role: table
+  first_result:
+    description: the first result link
+    strategies:
+      - role: link
+        landmark: re:table

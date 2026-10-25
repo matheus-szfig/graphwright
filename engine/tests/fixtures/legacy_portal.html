@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <title>Case lookup</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .hidden { display: none; }
+    /* covers the header nav only — the form below must stay clickable */
+    #overlay { position: fixed; left: 0; top: 0; width: 300px; height: 40px; background: rgba(0,0,0,.3); }
+    iframe { position: absolute; left: 50px; top: 500px; width: 600px; height: 300px; border: 0; }
+    table.layout td { padding: 6px; }
+  </style>
+</head>
+<body>
+  <!-- A legacy server-rendered portal: layout tables, label-less inputs, JSF-style
+       label groups, an iframe — the patterns the observer has to read. -->
+  <header>
+    <nav><a href="/home">Home</a><a href="/help">Help</a></nav>
+  </header>
+  <main>
+    <h1>Case lookup — first instance</h1>
+    <div class="error">No information is available for the given parameters.</div>
+    <form id="lookup" action="/cases/search.do" method="post">
+      <table class="layout">
+        <tr>
+          <td>Search by</td>
+          <td>
+            <select id="searchBy" name="searchBy">
+              <option value="N">Case number</option>
+              <option value="P" selected>Party name</option>
+              <option value="D">Party document</option>
+            </select>
+          </td>
+        </tr>
+        <tr>
+          <td>Case number</td>
+          <td><input type="text" id="caseNumberField" name="number" required></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td><input type="checkbox" id="unified" checked> <label for="unified">Unified</label></td>
+        </tr>
+        <tr>
+          <td>Format</td>
+          <td>
+            <!-- JSF-style group: one <label> wrapping the whole radio group -->
+            <label>
+              <input type="radio" name="format" id="format0" checked><label for="format0">Standard number</label>
+              <input type="radio" name="format" id="format1"><label for="format1">Free text</label>
+            </label>
+            <input type="radio" name="format" id="format2"> Loose text
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2">
+            <!-- The text field's label wraps a radio group, text BEFORE each radio -->
+            <div class="propertyView">
+              <div class="name">
+                <label for="partyDocument"> <p>Party document</p> Personal <input type="radio" name="docType" checked> Company <input type="radio" name="docType"></label>
+              </div>
+              <div class="value"><input id="partyDocument" type="text" maxlength="14"></div>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td>-</td>
+          <td><input type="submit" value="Search" id="searchCasesButton"></td>
+        </tr>
+      </table>
+      <input type="hidden" name="conversationId" value="abc">
+    </form>
+    <a id="hiddenLink" class="hidden" href="/hidden">Hidden</a>
+    <table id="cases">
+      <caption>Cases</caption>
+      <thead><tr><th>Number</th><th>Class</th><th>Subject</th></tr></thead>
+      <tbody>
+        <tr><td>CASE-2024-000123</td><td>Ordinary procedure</td><td>Damages</td></tr>
+        <tr><td>CASE-2024-000124</td><td>Enforcement</td><td>Collection</td></tr>
+      </tbody>
+    </table>
+  </main>
+  <div id="overlay"></div>
+  <iframe id="child" src="/child.html"></iframe>
+  <footer><a href="/terms">Terms of use</a></footer>
+</body>
+</html>
