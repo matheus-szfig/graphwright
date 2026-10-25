@@ -98,6 +98,9 @@ Key ideas (details in `engine/AGENTS.md`):
   lease service, or your own); values live in `Secret` objects and every log, event and
   error column passes through a redactor.
 - **`extract`** reads fields and tables into the run's outputs.
+- **Failure evidence**: when a run fails, the worker keeps what the page looked like — a
+  screenshot (typed secrets masked first), the redacted HTML, the observed PageState and
+  the decision trail — in S3 (RustFS in compose), listed at `GET /api/runs/{id}/artifacts`.
 
 ## Using the API
 
@@ -108,6 +111,7 @@ curl -s -X POST http://localhost:8080/api/runs \
 
 curl -N http://localhost:8080/api/runs/<id>/stream -H 'X-API-Key: dev-only-change-me'   # live (SSE)
 curl -s http://localhost:8080/api/runs/<id>        -H 'X-API-Key: dev-only-change-me'   # status + result
+curl -s http://localhost:8080/api/runs/<id>/artifacts -H 'X-API-Key: dev-only-change-me' # failure evidence
 ```
 
 See `api/AGENTS.md` for every endpoint and `/api/docs` for the OpenAPI UI.

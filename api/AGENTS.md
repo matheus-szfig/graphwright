@@ -9,7 +9,9 @@ a browser and never imports `graphwright.queue.app` (that is the worker).
 ```
 api/
 ├── src/graphwright_api/
-│   ├── config.py     Settings — the only env boundary (ENV, POSTGRES_DSN, REDIS_URL, API_KEYS, GRAPHS_DIR, PLUGINS, DB_PASSWORD_WORKER)
+│   ├── config.py     Settings — the API's env boundary (ENV, POSTGRES_DSN, REDIS_URL, API_KEYS, GRAPHS_DIR, PLUGINS, DB_PASSWORD_WORKER);
+│   │                 S3_* for evidence are read by graphwright's own settings (shared with the worker)
+│   ├── blobs.py      BlobReader — streams evidence objects out of S3 (tests swap it)
 │   ├── main.py       create_app() factory + routes; `graphwright-api` CLI (uvicorn)
 │   ├── store.py      RunStore protocol · PgRunStore (asyncpg) · MemoryRunStore (unit tests)
 │   ├── queue.py      CeleryEnqueuer — send_task / revoke by name from graphwright.contract
@@ -36,6 +38,8 @@ stripped (uvicorn `--root-path /api`).
 | GET | `/runs/{id}/events` | `?after=<event id> &limit=1..2000` | `{events: [{id, seq, kind, node, data, created_at}], next}` |
 | GET | `/runs/{id}/stream` | — | SSE: `event: run` (snapshot) → `event: progress` (each worker publish) → `event: end` (final `RunDetail`); `: ping` comments every 15 s |
 | POST | `/runs/{id}/cancel` | — | `Run` · 409 `run_final` (`detail.run_status`) · 404 |
+| GET | `/runs/{id}/artifacts` | — | `{artifacts: [{id, kind, content_type, size_bytes, node, metadata, created_at, url}]}` — failure evidence (D-34) |
+| GET | `/runs/{id}/artifacts/{artifact_id}` | — | the bytes (streamed from S3); HTML as an attachment with `CSP: sandbox`, everything `nosniff` · 404 `artifact_not_found` / `artifact_missing` |
 
 `Run`: id, graph, graph_version, status (`queued|running|completed|failed|cancelled`),
 inputs, **has_credential** (the reference itself is never echoed), requested_by,

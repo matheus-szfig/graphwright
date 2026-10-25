@@ -8,6 +8,8 @@
     GET  /runs/{id}              the run + its live progress snapshot
     GET  /runs/{id}/events       the durable decision trail; ?after=<event id> &limit=
     GET  /runs/{id}/stream       Server-Sent Events until the run is final
+    GET  /runs/{id}/artifacts    failure evidence: screenshot, html, pagestate, context
+    GET  /runs/{id}/artifacts/{artifact_id}   the evidence bytes
     POST /runs/{id}/cancel       queued/running → cancelled; final → 409
 
 Every route but /health needs ``X-API-Key``. Behind nginx the ``/api`` prefix is
@@ -31,11 +33,22 @@ from graphwright import catalog, plugins
 from graphwright.contract import FINAL_STATUSES, RUN_STATUSES
 
 from graphwright_api.auth import require_key
+from graphwright_api.blobs import BlobReader, ObjectNotFound, S3BlobReader
 from graphwright_api.config import Settings
 from graphwright_api.config import settings as default_settings
 from graphwright_api.progress import Progress, RedisProgress
 from graphwright_api.queue import CeleryEnqueuer, Enqueuer
-from graphwright_api.schemas import CreateRun, GraphSummary, Run, RunDetail, RunEvent, RunEvents, RunList
+from graphwright_api.schemas import (
+    Artifact,
+    Artifacts,
+    CreateRun,
+    GraphSummary,
+    Run,
+    RunDetail,
+    RunEvent,
+    RunEvents,
+    RunList,
+)
 from graphwright_api.store import PgRunStore, RunStore
 
 log = logging.getLogger(__name__)
@@ -53,6 +66,7 @@ def create_app(
     store: RunStore | None = None,
     enqueuer: Enqueuer | None = None,
     progress: Progress | None = None,
+    blobs: BlobReader | None = None,
     heartbeat_s: float = HEARTBEAT_S,
 ) -> FastAPI:
     cfg = settings or default_settings
@@ -82,6 +96,7 @@ def create_app(
     app.state.store = store
     app.state.enqueuer = enqueuer
     app.state.progress = progress
+    app.state.blobs = blobs or S3BlobReader()
 
     def deps(request: Request) -> tuple[RunStore, Enqueuer, Progress]:
         s = request.app.state
@@ -214,6 +229,44 @@ def create_app(
 
         return StreamingResponse(events(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # --- failure evidence ------------------------------------------------------------
+
+    @app.get("/runs/{run_id}/artifacts", response_model=Artifacts, dependencies=[Depends(require_key)])
+    async def list_artifacts(run_id: UUID, request: Request) -> Artifacts:
+        store_, _, _ = deps(request)
+        await _run_or_404(store_, run_id)
+        return Artifacts(artifacts=[Artifact.from_row(r) for r in await store_.list_artifacts(run_id)])
+
+    @app.get("/runs/{run_id}/artifacts/{artifact_id}", dependencies=[Depends(require_key)])
+    async def get_artifact(run_id: UUID, artifact_id: UUID, request: Request) -> StreamingResponse:
+        store_, _, _ = deps(request)
+        row = await store_.get_artifact(run_id, artifact_id)
+        if row is None:
+            raise _error(404, "artifact_not_found", f"no artifact {artifact_id} on run {run_id}")
+        chunks = request.app.state.blobs.stream(row["bucket"], row["object_key"])
+        try:
+            first = await anext(chunks)
+        except StopAsyncIteration:
+            first = b""
+        except ObjectNotFound as exc:
+            raise _error(404, "artifact_missing", "the artifact row exists but its object is gone") from exc
+
+        async def body() -> AsyncIterator[bytes]:
+            yield first
+            async for chunk in chunks:
+                yield chunk
+
+        content_type = row.get("content_type") or "application/octet-stream"
+        name = row["object_key"].rsplit("/", 1)[-1]
+        headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"}
+        if content_type.startswith("text/html"):
+            # Captured third-party HTML must never execute in the API's origin.
+            headers["Content-Disposition"] = f'attachment; filename="{run_id}-{name}"'
+            headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+        else:
+            headers["Content-Disposition"] = f'inline; filename="{run_id}-{name}"'
+        return StreamingResponse(body(), media_type=content_type, headers=headers)
 
     @app.post("/runs/{run_id}/cancel", response_model=Run, dependencies=[Depends(require_key)])
     async def cancel_run(run_id: UUID, request: Request) -> Run:

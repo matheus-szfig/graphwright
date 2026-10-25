@@ -2,7 +2,7 @@
 
 The `graphwright` Python package: the graph engine, the page observer, the stealth
 browser, credential providers, and the Celery worker that runs graphs. It consumes Redis,
-PostgreSQL and S3/MinIO as external services and owns none of them (the schema lives in
+PostgreSQL and S3 (RustFS in compose) as external services and owns none of them (the schema lives in
 `api/alembic`). `CLAUDE.md` is a symlink to this file.
 
 ```
@@ -31,7 +31,8 @@ engine/
 │   ├── queue/             Celery app, broker/backend config, routing
 │   ├── tasks/             runs.run_graph(run_id) · maintenance.health_check
 │   ├── worker/            hooks.py — per-process event loop, BrowserPool, asyncpg pool
-│   └── storage/           cache.py (Redis progress + pub/sub) · db.py (run rows) · blobs.py (S3 jars)
+│   ├── evidence.py        failure evidence: masked screenshot, redacted HTML, PageState, context → S3
+│   └── storage/           cache.py (Redis progress + pub/sub) · db.py (run rows) · blobs.py (S3 objects)
 ├── graphs/                example graphs (YAML) — run against demo-site
 ├── tests/                 pytest; goldens in tests/fixtures/goldens; GW_BROWSER_TESTS=1 for Chromium
 └── Dockerfile             worker image: python:3.13-slim + uv + Playwright Chromium
@@ -93,6 +94,12 @@ config.py · contract.py
 4. Terminal → `completed` with `result` (`terminal`, the node's `result`, `outputs`);
    otherwise `failed` with `error_type` (a code), scrubbed message/traceback and the
    structured `failure`.
+5. Evidence (D-34): on a failure — or a `terminal: failure` — and while the page is still
+   open, `evidence.capture` masks fields that received secrets, takes a screenshot, and
+   stores it with the redacted HTML, PageState and a context record in
+   `<S3_BUCKET_PREFIX>-evidence`; artifact ids go to `failure.evidence` /
+   `result.evidence`. Best effort: it never changes the outcome. `EVIDENCE_ON`
+   (`failure` | `always` | `never`) and `EVIDENCE_*` tune it.
 
 ## Graph authoring rules (`graphs/*.yaml`)
 

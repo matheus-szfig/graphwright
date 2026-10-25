@@ -278,3 +278,81 @@ def test_unexpected_errors_are_recorded_and_reraised(env) -> None:
     assert failed["error_type"] == "RuntimeError"
     # mark_run_failed scrubs with the run's redactor before storing
     assert failed["scrub"]("typing demo-password") == "typing ***"
+
+
+# --- failure evidence -------------------------------------------------------------------
+
+
+@pytest.fixture
+def captured(env) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    async def capture(session, run_id, attempt, *, reason, failure=None):
+        calls.append({"session": session, "run_id": run_id, "attempt": attempt, "reason": reason, "failure": failure})
+        return [{"id": "art-1", "kind": "screenshot"}]
+
+    env.monkeypatch.setattr(runs.evidence, "capture", capture)
+    return calls
+
+
+def test_a_failed_run_carries_its_evidence(env, captured) -> None:
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    provider(env.monkeypatch, DEMO)
+    FakeSession.final = ("needs_repair", None, {"type": "NoTransition", "message": "stuck", "details": []})
+
+    run_task()
+
+    assert [c["reason"] for c in captured] == ["failed"]
+    assert captured[0]["run_id"] == uuid.UUID(RUN_ID) and captured[0]["attempt"] == 1
+    assert captured[0]["session"] is FakeSession.built[0]  # taken while the page was open
+    assert db.call("failed")["failure"]["evidence"] == [{"id": "art-1", "kind": "screenshot"}]
+
+
+def test_a_failure_terminal_carries_evidence_in_the_result(env, captured) -> None:
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    provider(env.monkeypatch, DEMO)
+    FakeSession.final = ("done", {"terminal": "failure", "status": "invalid_credentials"}, None)
+
+    assert run_task()["status"] == "completed"
+    assert [c["reason"] for c in captured] == ["failure"]
+    assert db.call("completed")["result"]["evidence"] == [{"id": "art-1", "kind": "screenshot"}]
+
+
+def test_success_captures_nothing_unless_evidence_on_always(env, captured) -> None:
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    provider(env.monkeypatch, DEMO)
+    run_task()
+    assert captured == [] and "evidence" not in db.call("completed")["result"]
+
+    env.monkeypatch.setattr(runs.evidence.settings, "evidence_on", "always")
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    run_task()
+    assert [c["reason"] for c in captured] == ["success"]
+
+
+def test_unexpected_errors_still_try_to_capture(env, captured) -> None:
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    provider(env.monkeypatch, DEMO)
+
+    async def boom(self):
+        raise RuntimeError("navigation failed")
+
+    env.monkeypatch.setattr(FakeSession, "start", boom)
+    assert runs.run_graph.apply(args=[RUN_ID], task_id="celery-1").failed()
+    assert captured[0]["reason"] == "error" and captured[0]["failure"]["type"] == "RuntimeError"
+    assert db.call("failed")["failure"] == {"type": "RuntimeError", "evidence": [{"id": "art-1", "kind": "screenshot"}]}
+
+
+def test_evidence_off_means_no_capture(env, captured) -> None:
+    env.monkeypatch.setattr(runs.evidence.settings, "evidence_on", "never")
+    db = FakeDb(claimed())
+    db.install(env.monkeypatch)
+    provider(env.monkeypatch, DEMO)
+    FakeSession.final = ("failed", None, {"type": "RequestFailed", "message": "otp", "details": []})
+    run_task()
+    assert captured == [] and "evidence" not in db.call("failed")["failure"]

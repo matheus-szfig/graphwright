@@ -56,13 +56,13 @@ install-browsers: ## Playwright Chromium on the host (builder, `graphwright step
 up: ## Build + start the stack -> http://localhost:8080 (API at /api/docs)
 	docker compose up -d --build
 
-up-host-ports: ## Same as up, plus postgres/redis/minio/demo-site on 127.0.0.1
+up-host-ports: ## Same as up, plus postgres/redis/rustfs/demo-site on 127.0.0.1
 	docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d --build
 
 down: ## Stop the stack (keeps data volumes)
 	docker compose down
 
-nuke: ## Stop the stack AND wipe postgres + minio volumes
+nuke: ## Stop the stack AND wipe postgres + rustfs volumes
 	docker compose down -v
 
 restart: ## Restart all services, or one with s=<service>

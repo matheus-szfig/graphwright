@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 HeadlessMode = Literal["true", "false", "new"]
 CredentialProviderName = Literal["none", "file", "env", "http"]
+EvidenceMode = Literal["failure", "always", "never"]
 
 
 class Settings(BaseSettings):
@@ -24,10 +25,22 @@ class Settings(BaseSettings):
     # events and artifacts — nothing else. See api/alembic.
     postgres_dsn: str = Field(default="postgresql://graphwright_worker:graphwright_worker@localhost:5432/graphwright")
 
+    # Any S3-compatible store; compose runs RustFS.
     s3_endpoint: str = Field(default="http://localhost:9000")
-    s3_access_key: str = Field(default="minioadmin")
-    s3_secret_key: str = Field(default="minioadmin")
+    s3_access_key: str = Field(default="graphwright")
+    s3_secret_key: str = Field(default="graphwright-dev-only")
+    s3_region: str = Field(default="us-east-1")
     s3_bucket_prefix: str = Field(default="graphwright-dev")
+
+    # Failure evidence (graphwright/evidence.py): what the worker captures from the
+    # live page when a run fails — screenshot, redacted HTML, the last PageState and
+    # a context record — stored in <prefix>-<suffix> with one `artifact` row each.
+    # "failure" = failed runs and `terminal: failure` outcomes; "always" also on success.
+    evidence_on: EvidenceMode = Field(default="failure")
+    evidence_bucket_suffix: str = Field(default="evidence")
+    evidence_screenshot: bool = Field(default=True)
+    evidence_full_page: bool = Field(default=True)
+    evidence_max_bytes: int = Field(default=5_000_000)  # per object; larger HTML is truncated
 
     browser_headless: HeadlessMode = Field(default="true")
     browser_default_profile: str = Field(default="win11_chrome_1920")

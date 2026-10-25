@@ -39,6 +39,9 @@ class ActionContext:
     state: PageState | None = None  # latest observation; executors refresh it as needed
     log: Any = None  # callable(kind: str, **data)
     requests: RequestRunner | None = None
+    # Element ids that received a PII/secret value — masked on the page before a
+    # failure screenshot (graphwright/evidence.py). Shared with the session.
+    sensitive: set[str] = field(default_factory=set)
 
     def emit(self, kind: str, **data: Any) -> None:
         if self.log:
@@ -211,6 +214,8 @@ async def do_fill(spec: Fill, ctx: ActionContext) -> None:
     await ctx.human.type_text(value)
     typed = await ctx.observer.value_of(element_id)
     pii = _is_pii(spec, ctx)
+    if pii:
+        ctx.sensitive.add(element_id)
     # Masked inputs reformat as you type; compare digits/letters only.
     if typed is not None and _alnum(typed) and _alnum(value) and _alnum(value) not in _alnum(typed):
         # Never quote a credential in an error: it would travel into events,

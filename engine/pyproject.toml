@@ -7,7 +7,7 @@ dependencies = [
     # queue/ — Celery + Redis broker/result backend
     "celery[redis]>=5.4",
     "redis>=5.0",
-    # storage/ — PostgreSQL (async pool), S3/MinIO for per-domain session jars
+    # storage/ — PostgreSQL (async pool), S3 for failure evidence and session jars
     "asyncpg>=0.29",
     "aiobotocore>=2.13",
     # browser/ — Playwright + stealth patches

@@ -234,5 +234,10 @@ class Observer:
         frame = self._frame_for(table_id)
         return await self._call(frame.id, f"__ps.tableRows({json.dumps(table_id)}, {int(max_rows)})") if frame else None
 
+    async def mask_value(self, element_id: str) -> bool:
+        """Show bullets instead of a field's value (evidence screenshots)."""
+        frame = self._frame_for(element_id)
+        return bool(frame and await self._call(frame.id, f"__ps.maskValueOfId({json.dumps(element_id)})"))
+
     async def close(self) -> None:
         await self._worlds.close()

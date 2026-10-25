@@ -29,7 +29,7 @@ EXAMPLE_SUFFIX = ".example"
 LOCAL_REWRITES = [
     ("@postgres:5432", "@127.0.0.1:5432"),
     ("redis://redis:6379", "redis://127.0.0.1:6379"),
-    ("http://minio:9000", "http://127.0.0.1:9900"),
+    ("http://rustfs:9000", "http://127.0.0.1:9900"),
     ("http://demo-site:8090", "http://127.0.0.1:8090"),
 ]
 

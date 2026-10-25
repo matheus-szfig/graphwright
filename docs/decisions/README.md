@@ -45,6 +45,8 @@ graphwright was extracted from (D-24).
 | 2026-10-25 | D-31 | [Live progress is a Redis key plus pub/sub, relayed as Server-Sent Events](2026-10-25-D-31-live-progress-is-a-redis-key-plus-pub-sub-relayed-as-server.md) | implemented | `api` `queue` |
 | 2026-10-25 | D-32 | [Plugins are importable modules named in `PLUGINS`](2026-10-25-D-32-plugins-are-importable-modules-named-in-plugins.md) | implemented | `plugins` |
 | 2026-10-25 | D-33 | [API database tests only against a `*_test` database](2026-10-25-D-33-api-database-tests-only-against-a-test-database.md) | implemented | `api` `testing` |
+| 2026-10-25 | D-34 | [Failure evidence is captured from the live page, masked, and stored as artifacts](2026-10-25-D-34-failure-evidence-is-captured-from-the-live-page-masked-and-sto.md) | implemented | `engine` `api` `debugging` `security` |
+| 2026-10-25 | D-35 | [RustFS replaces MinIO as the stack's object store](2026-10-25-D-35-rustfs-replaces-minio-as-the-stack-s-object-store.md) | implemented | `devops` `storage` |
 
 ## Open / deferred
 
@@ -54,5 +56,5 @@ graphwright was extracted from (D-24).
 - Gates: captcha solvers, bot-wall handling, a human-in-the-loop queue (D-05).
 - Subgraphs/macros (`call` nodes and actions are parsed and linted, not executed).
 - Per-credential encrypted session jars (D-23); run webhooks/callbacks; multi-tenant API
-  keys (runs are visible to every key today).
+  keys (runs are visible to every key today); evidence retention/pruning (D-34).
 - The observer does not pierce shadow roots yet.

@@ -77,6 +77,31 @@ class RunEvents(BaseModel):
     next: int | None = None  # pass as ?after= for the next page
 
 
+class Artifact(BaseModel):
+    """Failure evidence (screenshot, html, pagestate, context) — the bytes are at `url`."""
+
+    id: UUID
+    kind: str
+    content_type: str | None = None
+    size_bytes: int | None = None
+    node: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    url: str  # relative to the API root: /runs/{run_id}/artifacts/{id}
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> Artifact:
+        return cls(
+            id=row["id"], kind=row["kind"], content_type=row.get("content_type"), size_bytes=row.get("size_bytes"),
+            node=row.get("node"), metadata=row.get("metadata") or {}, created_at=row["created_at"],
+            url=f"/runs/{row['run_id']}/artifacts/{row['id']}",
+        )
+
+
+class Artifacts(BaseModel):
+    artifacts: list[Artifact]
+
+
 class GraphSummary(BaseModel):
     name: str
     workflow: str

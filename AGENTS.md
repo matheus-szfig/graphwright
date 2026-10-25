@@ -36,7 +36,8 @@ graphwright/
 
 - **Run loop**: client → `api` (`POST /runs`) → Postgres `run` row (`queued`) → Redis →
   `worker` runs `engine/graphs/<graph>.yaml` → progress in Redis (key + pub/sub, relayed
-  as SSE by the API) → outcome and decision trail in Postgres.
+  as SSE by the API) → outcome and decision trail in Postgres; on failure, evidence
+  (masked screenshot, redacted HTML, PageState, context) in RustFS, served by the API.
 - **Credentials**: a run carries a credential *reference*; the worker's credential
   provider (`file`, `env`, `http` lease service, or a plugin) resolves it. Short-lived
   values (2FA codes) are graph **requests** fetched at the moment an action uses them.

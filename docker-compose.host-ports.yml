@@ -1,4 +1,4 @@
-# Opt-in override: publishes infra on the host's loopback for tools that run
+# Opt-in override: publishes infra (postgres, redis, rustfs, demo-site) on the host's loopback for tools that run
 # outside docker (engine/api tests against the dev DB, `graphwright watch`, a
 # worker started with `uv run celery …`, the headed builder reaching demo-site).
 #
@@ -16,11 +16,11 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
 
-  minio:
+  rustfs:
     # 9000 is often taken on dev machines, hence 9900/9901.
     ports:
       - "127.0.0.1:9900:9000"   # S3 API
-      - "127.0.0.1:9901:9001"   # console
+      - "127.0.0.1:9901:9001"   # console (http://localhost:9901, graphwright / graphwright-dev-only)
 
   demo-site:
     ports:

@@ -447,6 +447,23 @@
     return { headers, rows };
   }
 
+  // Replace what a field shows with bullets — evidence screenshots must not show a
+  // typed secret. Runs only after a run has ended (it changes the page).
+  function maskValueOfId(id) {
+    const el = byId.get(id) && byId.get(id).deref();
+    if (!el) return false;
+    const bullets = (n) => "•".repeat(Math.max(4, Math.min(n, 12)));
+    if (el.value != null && el.tagName.toLowerCase() !== "button") {
+      el.value = bullets(String(el.value).length);
+      return true;
+    }
+    if (el.isContentEditable) {
+      el.textContent = bullets(el.textContent.length);
+      return true;
+    }
+    return false;
+  }
+
   function frameOffset() {
     try {
       const fe = window.frameElement;
@@ -456,5 +473,5 @@
     } catch (_) { return null; } // cross-origin parent
   }
 
-  globalThis.__ps = { extract, signature, box, frameOffset, query, selectOption, scrollIntoView, valueOfId, textOfId, tableRows };
+  globalThis.__ps = { extract, signature, box, frameOffset, query, selectOption, scrollIntoView, valueOfId, textOfId, tableRows, maskValueOfId };
 })();

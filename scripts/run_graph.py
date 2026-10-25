@@ -8,7 +8,8 @@
 
 Talks to http://localhost:8080/api by default (``--api`` / ``GW_API_URL``) with the
 dev key (``--key`` / ``GW_API_KEY``). Follows ``GET /runs/{id}/stream`` (SSE) until
-the run finishes, then prints the stored result or failure. Exit code 0 only if
+the run finishes, then prints the stored result or failure — and, for a failed run,
+links to its evidence (screenshot, HTML, PageState, context). Exit code 0 only if
 every run completed.
 """
 
@@ -100,6 +101,10 @@ def run_one(api: Api, graph: str, inputs: dict[str, str], credential: str | None
         print("    result: " + json.dumps(final.get("result"), ensure_ascii=False)[:600])
     else:
         print(f"  ✘ {status} — {final.get('error_type')}: {final.get('error_message')}")
+    failed_terminal = status == "completed" and final.get("terminal") == "failure"
+    if status == "failed" or failed_terminal:
+        for art in api.get(f"/runs/{run['id']}/artifacts").get("artifacts", []):
+            print(f"    evidence {art['kind']:<10} {art.get('size_bytes') or 0:>8} B  {api.base}{art['url']}")
     return status == "completed"
 
 

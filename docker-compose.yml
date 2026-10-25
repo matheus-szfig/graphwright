@@ -2,7 +2,7 @@
 #
 #   redis      broker + result backend + live run progress (key + pub/sub)
 #   postgres   runs, run events, artifacts (schema: api/alembic)
-#   minio      per-domain browser session jars (S3 API)
+#   rustfs     S3-compatible object storage: failure evidence (screenshots, HTML…)
 #   migrate    one-shot `alembic upgrade head`
 #   api        runs API — the only thing client apps talk to (/api/ behind nginx)
 #   worker     Celery worker: graph engine + stealth Chromium (internal network only)
@@ -13,12 +13,12 @@
 # Per-app env comes from each app's .env.docker (`make setup-env`). Dev loop:
 # `docker compose watch` — Python services sync+restart, Vite syncs (HMR), and
 # dependency/build changes rebuild. Source and config are never bind-mounted;
-# volumes are for persistence only (postgres, minio) — the one exception is the
+# volumes are for persistence only (postgres, rustfs) — the one exception is the
 # builder's graph folder, which is the point of the builder (its edits land in
 # the repo).
 #
 # Networks mirror a cloud layout: `edge` (what nginx reaches) and `internal`
-# (datastores, worker, demo-site). Host tools that need postgres/redis/minio/
+# (datastores, worker, demo-site). Host tools that need postgres/redis/rustfs/
 # demo-site directly: layer docker-compose.host-ports.yml (`make up-host-ports`).
 
 name: graphwright
@@ -72,17 +72,25 @@ services:
       timeout: 3s
       retries: 10
 
-  minio:
-    # Chainguard's free MinIO build (no shell → no healthcheck; the worker creates
-    # buckets lazily, so service_started is enough).
-    image: cgr.dev/chainguard/minio:latest
+  rustfs:
+    # S3-compatible object storage for failure evidence (and opt-in session jars).
+    # The engine speaks plain S3, so any S3 endpoint works in its place.
+    image: rustfs/rustfs:1.0.4
     networks: [internal]
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: graphwright
+      RUSTFS_SECRET_KEY: graphwright-dev-only
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   migrate:
     build:
@@ -111,6 +119,8 @@ services:
     networks: [edge, internal]
     depends_on:
       redis:
+        condition: service_healthy
+      rustfs:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -149,8 +159,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_started
+      rustfs:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     develop:
@@ -244,4 +254,4 @@ networks:
 
 volumes:
   postgres_data:
-  minio_data:
+  rustfs_data:

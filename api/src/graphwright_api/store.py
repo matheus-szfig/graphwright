@@ -24,6 +24,9 @@ RUN_COLUMNS = (
 )
 
 
+ARTIFACT_COLUMNS = "id, run_id, kind, bucket, object_key, content_type, size_bytes, node, metadata, created_at"
+
+
 class RunStore(Protocol):
     async def create_run(
         self, *, graph: str, graph_version: int | None, inputs: dict[str, Any], credential_ref: str | None,
@@ -40,6 +43,10 @@ class RunStore(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     async def list_events(self, run_id: uuid.UUID, *, after: int, limit: int) -> list[dict[str, Any]]: ...
+
+    async def list_artifacts(self, run_id: uuid.UUID) -> list[dict[str, Any]]: ...
+
+    async def get_artifact(self, run_id: uuid.UUID, artifact_id: uuid.UUID) -> dict[str, Any] | None: ...
 
     async def mark_enqueue_failed(self, run_id: uuid.UUID, message: str) -> None: ...
 
@@ -114,6 +121,18 @@ class PgRunStore:
             rows = await conn.fetch(sql, run_id, after, limit)
         return [dict(r) for r in rows]
 
+    async def list_artifacts(self, run_id):
+        sql = f"SELECT {ARTIFACT_COLUMNS} FROM artifact WHERE run_id = $1 ORDER BY created_at, id;"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, run_id)
+        return [dict(r) for r in rows]
+
+    async def get_artifact(self, run_id, artifact_id):
+        sql = f"SELECT {ARTIFACT_COLUMNS} FROM artifact WHERE run_id = $1 AND id = $2;"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(sql, run_id, artifact_id)
+        return dict(row) if row else None
+
     async def mark_enqueue_failed(self, run_id, message):
         sql = """
             UPDATE run SET status = 'failed', finished_at = now(), error_type = 'enqueue_failed', error_message = $2
@@ -173,6 +192,7 @@ class MemoryRunStore:
     def __init__(self) -> None:
         self.runs: dict[uuid.UUID, dict[str, Any]] = {}
         self.events: dict[uuid.UUID, list[dict[str, Any]]] = {}
+        self.artifacts: dict[uuid.UUID, list[dict[str, Any]]] = {}
 
     async def create_run(self, *, graph, graph_version, inputs, credential_ref, requested_by, idempotency_key):
         if idempotency_key is not None:
@@ -199,6 +219,12 @@ class MemoryRunStore:
 
     async def list_events(self, run_id, *, after, limit):
         return [e for e in self.events.get(run_id, []) if e["id"] > after][:limit]
+
+    async def list_artifacts(self, run_id):
+        return [dict(a) for a in self.artifacts.get(run_id, [])]
+
+    async def get_artifact(self, run_id, artifact_id):
+        return next((dict(a) for a in self.artifacts.get(run_id, []) if a["id"] == artifact_id), None)
 
     async def mark_enqueue_failed(self, run_id, message):
         row = self.runs.get(run_id)

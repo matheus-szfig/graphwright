@@ -93,6 +93,7 @@ class GraphSession:
             services.on_secret = redactor.add
         self.requests = RequestRunner(graph.workflow.requests, services)
         self.vars: dict[str, Any] = {}
+        self.sensitive_elements: set[str] = set()  # fields that hold a typed secret
         self.node: str = graph.workflow.start
         self.status: Status = "idle"
         self.visits: Counter[str] = Counter()
@@ -141,6 +142,7 @@ class GraphSession:
         return ActionContext(
             page=self.page, observer=self.observer, human=self.human, workflow=self.workflow,
             inputs=self.inputs, vars=self.vars, state=state, log=self._emit, requests=self.requests,
+            sensitive=self.sensitive_elements,
         )
 
     # -- lifecycle --

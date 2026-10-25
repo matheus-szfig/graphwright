@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+from graphwright import evidence
 from graphwright.catalog import GraphInvalid, GraphNotFound, InputsInvalid, build_inputs, load_graph
 from graphwright.config import settings
 from graphwright.contract import TASK_RUN_GRAPH
@@ -69,7 +70,7 @@ def _domain(graph: CompiledGraph) -> str:
 
 async def _drive(
     pool: Any, graph: CompiledGraph, inputs: SecretInputs, redactor: Redactor, *,
-    credential: Credential | None, on_event: Any, cancelled: Any,
+    credential: Credential | None, on_event: Any, cancelled: Any, run_id: uuid.UUID, attempt: int,
 ) -> dict[str, Any]:
     async with pool.context_for(
         _domain(graph),
@@ -80,18 +81,38 @@ async def _drive(
         page = await context.new_page()
         services = RequestServices(totp=credential.totp if credential else None, on_secret=redactor.add)
         session = GraphSession(graph, page, inputs, redactor=redactor, on_event=on_event, services=services)
-        await session.start()
-        steps = 0
-        while True:
-            result = await session.step()
-            steps += 1
-            if result.status in ("done", "failed", "needs_repair"):
-                break
-            if steps % _CANCEL_CHECK_EVERY == 0 and await cancelled():
-                raise RunCancelled()
+        try:
+            await session.start()
+            steps = 0
+            while True:
+                result = await session.step()
+                steps += 1
+                if result.status in ("done", "failed", "needs_repair"):
+                    break
+                if steps % _CANCEL_CHECK_EVERY == 0 and await cancelled():
+                    raise RunCancelled()
+        except RunCancelled:
+            raise
+        except Exception as exc:
+            # Not an engine failure (those end the loop above): a browser crash, a
+            # navigation error… The page may still show why.
+            if evidence.wanted("failed"):
+                exc.gw_evidence = await evidence.capture(  # type: ignore[attr-defined]
+                    session, run_id, attempt, reason="error",
+                    failure={"type": type(exc).__name__, "message": redactor.text(str(exc))},
+                )
+            raise
+        # The page is still open here — this is the only place evidence can come from.
         if session.status != "done":
-            raise GraphRunFailed(session.failure or {"type": "unknown", "message": session.status}, session.status)
-        return session.result or {}
+            failure = dict(session.failure or {"type": "unknown", "message": session.status})
+            if evidence.wanted("failed"):
+                failure["evidence"] = await evidence.capture(session, run_id, attempt, reason="failed", failure=failure)
+            raise GraphRunFailed(failure, session.status)
+        result = dict(session.result or {})
+        outcome = "failure" if result.get("terminal") == "failure" else "success"
+        if evidence.wanted(outcome):
+            result["evidence"] = await evidence.capture(session, run_id, attempt, reason=outcome)
+        return result
 
 
 @celery.task(bind=True, name=TASK_RUN_GRAPH)
@@ -173,6 +194,7 @@ def run_graph(self, run_id: str) -> dict[str, Any]:
 
         result = loop.run_until_complete(_drive(
             pool, graph, inputs, redactor, credential=credential, on_event=on_event, cancelled=cancelled,
+            run_id=rid, attempt=claimed.attempt,
         ))
     except RunCancelled:
         loop.run_until_complete(_flush())
@@ -185,7 +207,9 @@ def run_graph(self, run_id: str) -> dict[str, Any]:
         error_type = exc.code if isinstance(exc, RunRejected) else (
             f"graph_{exc.status}" if isinstance(exc, GraphRunFailed) else type(exc).__name__
         )
-        failure = exc.failure if isinstance(exc, GraphRunFailed) else None
+        failure = exc.failure if isinstance(exc, GraphRunFailed) else (
+            {"type": type(exc).__name__, "evidence": exc.gw_evidence} if getattr(exc, "gw_evidence", None) else None
+        )
         loop.run_until_complete(_flush())
         loop.run_until_complete(db.insert_run_events(rid, durable))
         loop.run_until_complete(db.mark_run_failed(

@@ -155,3 +155,71 @@ async def test_relay_failure_routes_to_a_failure_terminal(page, demo_site, crede
     assert session.status == "done", session.failure
     assert session.result["status"] == "otp_unavailable"
     assert "revoked-token" not in json.dumps(events)
+
+
+STUCK_AFTER_PASSWORD = """
+workflow: stuck_login
+portal: acme-records
+entry_url: "{base_url}/login"
+inputs:
+  base_url: {type: url, pii: false}
+  password: {type: password, credential: password}
+start: sign_in
+nodes:
+  sign_in:
+    recognize: {visible: password_field}
+    actions:
+      - fill: {target: password_field, value: "{password}"}
+    timeout_s: 1
+    transitions:
+      - {to: done, when: {url: "re:^/never$"}}
+  done: {terminal: success}
+targets:
+  password_field:
+    description: the password field
+    strategies: [{role: textbox, name: "re:^password$"}]
+"""
+
+
+async def test_failure_evidence_masks_the_typed_secret(page, demo_site, credentials_file, monkeypatch) -> None:
+    """A run stuck on the page right after typing a password: the evidence (real
+    screenshot, HTML, PageState) must not carry the password, and the field on the
+    page shows bullets by the time the screenshot is taken."""
+    import uuid
+
+    from graphwright import evidence
+    from graphwright.engine import Workflow, compile_workflow
+
+    _, base = demo_site
+    credential = FileProvider(credentials_file).redeem("demo-user", run_id="e2e")
+    graph = compile_workflow(Workflow.from_yaml_text(STUCK_AFTER_PASSWORD))
+    redactor = Redactor(credential.plaintexts)
+    session = GraphSession(graph, page, build_inputs(graph.workflow, {"base_url": base}, credential),
+                           budget=FAST, redactor=redactor)
+    await session.run()
+    assert session.status == "needs_repair" and session.failure["type"] == "NoTransition"
+
+    stored: dict[str, bytes] = {}
+
+    async def put_object(bucket, key, body, *, content_type):
+        stored[key.rsplit("/", 1)[-1]] = body
+
+    async def insert_artifact(**kw):
+        return uuid.uuid4()
+
+    monkeypatch.setattr(evidence.blobs, "put_object", put_object)
+    monkeypatch.setattr(evidence.db, "insert_artifact", insert_artifact)
+    artifacts = await evidence.capture(session, uuid.UUID(int=1), 1, reason="failed", failure=session.failure)
+
+    assert {a["kind"] for a in artifacts} == {"screenshot", "html", "pagestate", "context"}
+    assert stored["screenshot.jpg"][:3] == b"\xff\xd8\xff"  # a real JPEG
+    password = credential.values["password"]
+    for name, body in stored.items():
+        assert password.encode() not in body, name
+    field_value = await page.evaluate("document.querySelector('#password').value")
+    assert field_value and set(field_value) == {"•"}  # masked before the picture
+    state = json.loads(stored["pagestate.json"])
+    pw = next(e for e in state["elements"] if e.get("dom_id") == "password")
+    assert pw["value"] == "***"
+    context = json.loads(stored["context.json"])
+    assert context["failure"]["type"] == "NoTransition" and context["node"] == "sign_in"
