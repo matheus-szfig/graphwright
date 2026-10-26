@@ -84,6 +84,12 @@ async def test_record_search_extracts_fields_and_events(page, demo_site) -> None
     assert record["status"] == "Active" and record["owner"] == "Jane Doe"
     assert [r["Event"] for r in record["events"]] == ["Application received", "Site inspection passed", "Permit issued"]
     assert record["schema"] == "acme_record_v1"
+    # the code node: evaluate (in-page JS) + script (sandboxed JS) derived a summary
+    assert session.result["outputs"]["summary"] == {
+        "event_count": 3, "rows_match": True, "last_event": "2024-04-01: Permit issued", "status": "active",
+    }
+    kinds = [e["kind"] for e in events]
+    assert "evaluate" in kinds and "script" in kinds
     assert any(e["kind"] == "extract" for e in events)
 
 

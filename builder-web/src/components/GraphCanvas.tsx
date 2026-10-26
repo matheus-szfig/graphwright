@@ -21,6 +21,7 @@ import { Badge, Chip, Icon, type Tone } from "./ui"
 
 const KIND: Record<NodeKind, { icon: string; tone: Tone; label: string; border: string }> = {
   step: { icon: "web", tone: "secondary", label: "STEP", border: "border-outline" },
+  code: { icon: "code", tone: "primary", label: "CODE", border: "border-primary/50" },
   call: { icon: "account_tree", tone: "tertiary", label: "CALL", border: "border-tertiary/50" },
   success: { icon: "check_circle", tone: "success", label: "SUCCESS", border: "border-success/50" },
   outcome: { icon: "flag", tone: "warning", label: "OUTCOME", border: "border-warning/50" },
@@ -56,7 +57,7 @@ function GraphNode({ data }: NodeProps<RFNode<NodeData>>) {
             <Icon name="bolt" size={11} fill />
             start
           </span>
-        ) : terminal ? (
+        ) : terminal || data.kind === "code" ? (
           <Badge tone={k.tone}>{k.label}</Badge>
         ) : null}
       </div>
@@ -147,7 +148,7 @@ export function GraphCanvas(p: GraphCanvasProps) {
         zoomable
         bgColor="#0d111a"
         maskColor="rgba(12, 16, 23, 0.55)"
-        nodeColor={(n) => ({ step: "#4cd7f6", call: "#ddb7ff", success: "#10b981", outcome: "#f59e0b", failure: "#f43f5e" })[(n.data as NodeData).kind]}
+        nodeColor={(n) => ({ step: "#4cd7f6", code: "#c0c1ff", call: "#ddb7ff", success: "#10b981", outcome: "#f59e0b", failure: "#f43f5e" })[(n.data as NodeData).kind]}
         nodeStrokeWidth={0}
       />
     </ReactFlow>

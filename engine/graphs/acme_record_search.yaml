@@ -19,6 +19,7 @@ inputs:
     default: Any type
 outputs:
   record: acme_record_v1
+  summary: acme_record_summary_v1
 start: search_form
 nodes:
   search_form:
@@ -75,6 +76,32 @@ nodes:
       - var:
           name: record.title
           op: set
+    transitions:
+      - to: summarize
+  summarize:
+    intent: code node — derive a summary from what was extracted (no page I/O)
+    recognize:
+      url: re:^/records/
+    actions:
+      # JavaScript in the page's isolated world: read something the extractor does not.
+      - evaluate:
+          script: return document.querySelectorAll('table tbody tr').length
+          into: rows_on_page
+      # Sandboxed JavaScript (fresh V8 isolate, no I/O): vars in → vars out.
+      - script:
+          into: summary
+          args:
+            events: '{vars.record.events}'
+            rows: '{vars.rows_on_page}'
+          code: |
+            const events = args.events || [];
+            const last = events[events.length - 1] || null;
+            return {
+              event_count: events.length,
+              rows_match: events.length === args.rows,
+              last_event: last ? `${last.Date}: ${last.Event}` : null,
+              status: (vars.record.status || "").toLowerCase(),
+            };
     transitions:
       - to: done
   not_found:

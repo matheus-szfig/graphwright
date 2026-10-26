@@ -19,7 +19,7 @@ from graphwright.engine.conditions import EvalContext
 from graphwright.engine.errors import JumpSignal, NotActionable, StructuralError, TargetNotFound, TransientError
 from graphwright.engine.requests import RequestFailed, RequestResult, RequestRunner, dependencies
 from graphwright.engine.requests import references as request_references
-from graphwright.engine.schema import Action, Extract, Fetch, Fill, Pattern, Target, Workflow
+from graphwright.engine.schema import Action, Evaluate, Extract, Fetch, Fill, Pattern, Script, Target, Workflow
 from graphwright.engine.secrets import MASK, Secret
 from graphwright.engine.targets import resolve
 from graphwright.observe.observer import ElementBox, Observer
@@ -338,6 +338,174 @@ def _field_pattern(source: str) -> re.Pattern[str]:
     return p._regex  # noqa: SLF001 — Pattern is ours
 
 
+# --- code: sandboxed scripts and in-page JavaScript ------------------------------------
+
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _has_secret(value: Any) -> bool:
+    if isinstance(value, Secret):
+        return True
+    if isinstance(value, dict):
+        return any(_has_secret(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_secret(v) for v in value)
+    return False
+
+
+async def _render_args(args: Any, ctx: ActionContext) -> Any:
+    """Templates in arg values → values. A string that is exactly one template keeps
+    the value's type (a Secret stays a Secret, a dict stays a dict)."""
+    if isinstance(args, str):
+        m = _TEMPLATE.fullmatch(args.strip())
+        if m:
+            for name in dict.fromkeys(r for r, _ in request_references(args)):
+                await fetch_request(name, ctx)
+            return _lookup_template(m.group(1), ctx)
+        return await ctx.render(args)
+    if isinstance(args, dict):
+        return {k: await _render_args(v, ctx) for k, v in args.items()}
+    if isinstance(args, list):
+        return [await _render_args(v, ctx) for v in args]
+    return args
+
+
+def _lookup_template(path: str, ctx: ActionContext) -> Any:
+    root, _, rest = path.partition(".")
+    if root == "vars":
+        value: Any = ctx.vars
+    elif root == "page":
+        value = {"url": ctx.state.url if ctx.state else "", "title": ctx.state.title if ctx.state else ""}
+    elif root == "requests":
+        name, _, rest = rest.partition(".")
+        value = ctx.requests.values(name) if ctx.requests else None
+        if value is None:
+            raise RequestFailed(f"request {name!r} has no value for {{{path}}}", name=name)
+    else:
+        value, rest = ctx.inputs, path
+    for part in [p for p in re.split(r"\.|\[(\d+)\]", rest) if p]:
+        if isinstance(value, list) and part.isdigit():
+            value = value[int(part)] if int(part) < len(value) else None
+        else:
+            value = value.get(part) if isinstance(value, dict) else getattr(value, part, None)
+        if value is None:
+            raise StructuralError(f"template {{{path}}} is not set")
+    return value
+
+
+def _reveal(value: Any) -> Any:
+    if isinstance(value, Secret):
+        return value.reveal()
+    if isinstance(value, dict):
+        return {k: _reveal(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_reveal(v) for v in value]
+    return value
+
+
+def _plain(value: Any) -> Any:
+    """A JSON-safe copy without Secrets (what a script may read of vars/inputs)."""
+    if isinstance(value, Secret):
+        return None
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items() if not isinstance(v, Secret)}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _as_secrets(value: Any, ctx: ActionContext) -> Any:
+    """Outputs of a script that saw secrets: every string becomes a Secret and the
+    run's redactor learns it."""
+    if isinstance(value, str):
+        if ctx.requests is not None and ctx.requests.services.on_secret:
+            ctx.requests.services.on_secret(value)
+        return Secret(value)
+    if isinstance(value, dict):
+        return {k: _as_secrets(v, ctx) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_as_secrets(v, ctx) for v in value]
+    return value
+
+
+def _store_result(into: str | None, value: Any, ctx: ActionContext, verb: str) -> list[str]:
+    if into:
+        ctx.vars[into] = value
+        return [into]
+    if not isinstance(value, dict):
+        raise StructuralError(f"{verb}: without `into` the code must return an object (got {type(value).__name__})")
+    bad = [k for k in value if not _IDENT.match(k) or k.startswith("_")]
+    if bad:
+        raise StructuralError(f"{verb}: returned keys are not valid var names: {bad}")
+    ctx.vars.update(value)
+    return list(value)
+
+
+async def do_script(spec: Script, ctx: ActionContext) -> None:
+    import asyncio
+
+    from graphwright.engine.sandbox import run_js
+
+    args = await _render_args(spec.args, ctx)
+    secret = _has_secret(args)
+    if secret and not spec.allow_secrets:
+        raise StructuralError("script: an arg is a secret (credential or sensitive request value); "
+                              "set `allow_secrets: true` if the code really needs it")
+    result = await asyncio.to_thread(
+        run_js, spec.code, args=_reveal(args), vars=_plain(ctx.vars), inputs=_plain(dict(ctx.inputs)),
+        timeout_ms=spec.timeout_ms, memory_mb=spec.memory_mb,
+    )
+    if not result.ok:
+        ctx.emit("script", ok=False, error=result.error, logs=result.logs, elapsed_ms=result.elapsed_ms)
+        raise StructuralError(f"script failed: {(result.error or '').splitlines()[0] if result.error else 'error'}",
+                              details=[*(result.error or "").splitlines()[:8], *result.logs[-10:]])
+    value = _as_secrets(result.value, ctx) if secret else result.value
+    names = _store_result(spec.into, value, ctx, "script")
+    ctx.emit("script", ok=True, set=names, logs=result.logs, elapsed_ms=result.elapsed_ms,
+             value="***" if secret else _summary(result.value))
+
+
+async def do_evaluate(spec: Evaluate, ctx: ActionContext) -> None:
+    import asyncio
+    import json as _json
+    import time as _time
+
+    args = await _render_args(spec.args, ctx)
+    secret = _has_secret(args)
+    if secret and not spec.allow_secrets:
+        raise StructuralError("evaluate: an arg is a secret; set `allow_secrets: true` to hand it to the page")
+    t0 = _time.perf_counter()
+    try:
+        value = await asyncio.wait_for(
+            ctx.observer.evaluate(spec.script, _reveal(args), world=spec.world, frame=spec.frame),
+            spec.timeout_ms / 1000,
+        )
+    except TimeoutError as exc:
+        raise TransientError(f"evaluate did not finish in {spec.timeout_ms} ms") from exc
+    except Exception as exc:  # the page threw, or the frame is gone
+        ctx.emit("evaluate", ok=False, world=spec.world, error=str(exc))
+        raise StructuralError(f"evaluate failed: {exc}") from exc
+    elapsed = int((_time.perf_counter() - t0) * 1000)
+    try:
+        _json.dumps(value)
+    except (TypeError, ValueError) as exc:
+        raise StructuralError(f"evaluate returned a non-JSON value: {exc}") from exc
+    stored = _as_secrets(value, ctx) if secret else value
+    names = _store_result(spec.into, stored, ctx, "evaluate") if (spec.into or value is not None) else []
+    ctx.emit("evaluate", ok=True, world=spec.world, set=names, elapsed_ms=elapsed,
+             value="***" if secret else _summary(value))
+    ctx.state = None  # the script may have changed the page
+
+
+def _summary(value: Any, limit: int = 300) -> Any:
+    import json as _json
+
+    text = _json.dumps(value, ensure_ascii=False, default=str)
+    return value if len(text) <= limit else text[:limit] + "…"
+
+
 async def do_assert(condition, message: str, ctx: ActionContext) -> None:
     state = ctx.state or await ctx.fresh_state()
     m = conditions.evaluate(condition, ctx.eval_ctx(state))
@@ -367,6 +535,10 @@ async def run_action(action: Action, ctx: ActionContext) -> None:
         await do_fetch(body, ctx)
     elif verb == "extract":
         await do_extract(body, ctx)
+    elif verb == "script":
+        await do_script(body, ctx)
+    elif verb == "evaluate":
+        await do_evaluate(body, ctx)
     elif verb == "assert":
         await do_assert(body.condition, body.message, ctx)
     elif verb == "jump":

@@ -305,6 +305,29 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
                 errors.append(f"{name}: action #{i} calls unknown macro {a.call.macro!r}")
             if a.fetch and a.fetch.request not in wf.requests:
                 errors.append(f"{name}: action #{i} fetches unknown request {a.fetch.request!r}")
+            if a.script or a.evaluate:
+                from graphwright.engine.sandbox import syntax_error
+
+                body = a.script.code if a.script else a.evaluate.script
+                err = syntax_error(body, is_async=bool(a.evaluate))
+                if err:
+                    errors.append(f"{name}: action #{i} ({a.verb}) does not compile: {err}")
+                code_spec = a.script or a.evaluate
+                if code_spec.into is not None and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", code_spec.into):
+                    errors.append(f"{name}: action #{i} ({a.verb}) `into` must be a var name, got {code_spec.into!r}")
+
+                def _arg_strings(v):
+                    if isinstance(v, str):
+                        yield v
+                    elif isinstance(v, dict):
+                        for x in v.values():
+                            yield from _arg_strings(x)
+                    elif isinstance(v, list):
+                        for x in v:
+                            yield from _arg_strings(x)
+
+                for text in _arg_strings(code_spec.args):
+                    _check_template(text, f"{name}: action #{i} ({a.verb}) args", wf, errors)
             if a.extract:
                 for fname, fs in a.extract.fields.items():
                     if fs.target and fs.target not in wf.targets:

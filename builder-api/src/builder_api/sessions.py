@@ -235,6 +235,48 @@ class SessionManager:
         m = evaluate(cond, live.session.action_context(s).eval_ctx(s))
         return {"ok": m.ok, "reasons": m.reasons}
 
+    async def console(self, sid: str, script: str, *, args: dict[str, Any] | None = None, world: str = "isolated",
+                      frame: int | str = 0, timeout_ms: int = 5000) -> dict[str, Any]:
+        """Run ad-hoc JavaScript in the session's page — the builder's browser console.
+        Same path as the `evaluate` action (an async function body with `args`), and
+        the result lands in the session's event stream, redacted."""
+        import json
+        import time
+
+        live = self.get(sid)
+        s = live.session
+        if world not in ("isolated", "main"):
+            raise ValueError(f"world must be 'isolated' or 'main', got {world!r}")
+        t0 = time.perf_counter()
+
+        async def go() -> Any:
+            return await asyncio.wait_for(s.observer.evaluate(script, args or {}, world=world, frame=frame),
+                                          timeout_ms / 1000)
+
+        try:
+            value = await self._guard(live, go())
+        except RuntimeError as exc:
+            if "busy" in str(exc):
+                raise
+            error = str(exc)
+        except TimeoutError:
+            error = f"did not finish in {timeout_ms} ms"
+        except Exception as exc:  # noqa: BLE001 — the page threw / frame gone: that is the answer
+            error = str(exc)
+        else:
+            elapsed = int((time.perf_counter() - t0) * 1000)
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                value = repr(value)
+            value = s.redact(value)
+            s.emit("evaluate", ok=True, world=world, frame=frame, source="console", elapsed_ms=elapsed, value=value)
+            return {"ok": True, "value": value, "error": None, "elapsed_ms": elapsed}
+        elapsed = int((time.perf_counter() - t0) * 1000)
+        error = s.redact(error)
+        s.emit("evaluate", ok=False, world=world, frame=frame, source="console", elapsed_ms=elapsed, error=error)
+        return {"ok": False, "value": None, "error": error, "elapsed_ms": elapsed}
+
     async def run_request(self, sid: str, name: str, *, variables: dict[str, Any] | None = None,
                           reveal: bool = False) -> dict[str, Any]:
         """Run one graph request inside a live session: the session's inputs, vars and

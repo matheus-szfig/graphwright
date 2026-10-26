@@ -45,24 +45,34 @@ in `builder-web/src/index.css` (`@theme`), shared controls in
 `<Section>` rather than raw palette colours. Confirms and prompts go through
 `useDialog()` (`components/dialog.tsx`) — **never** `window.alert/confirm/prompt`.
 
-- **Left rail**: Graph (pick, create, delete — with an in-theme confirm — and add nodes) ·
+- **Left rail**: Graph (pick, create, delete — with an in-theme confirm — and add nodes:
+  `step`, `code`, `outcome`, `success`, `failure`; a `code` node is `recognize: {always: true}`
+  + a `script` stub, hooked from start so it lints) ·
   Inputs (declare with type, description, default, `credential:` field, required, PII;
   fill session values; credential reference).
 - **Canvas** (React Flow + dagre): node cards with kind, intent, action/edge chips and a
   live "recognizes the last observation?" marker; current node glows, failing node is
-  rose. Edges: cyan `always`, indigo conditional, rose dashed `on_fail`, purple `call`.
+  rose; a node whose actions are all `script`/`evaluate` shows as **CODE** (`code` icon).
+  Edges: cyan `always`, indigo conditional, rose dashed `on_fail`, purple `call`.
   Drag port→port adds a transition; Delete removes nodes/edges — all through the API.
 - **Player HUD**: Start · fast/human timing · Step (F10) · Run (F5) · Observe · Patch ·
   Go to selected node · Stop, plus a status chip.
 - **Inspector tabs**: Node / Graph YAML (CodeMirror, Tab-to-accept completions from
   `/schema`, the graph — nodes, targets, shapers, `{input}` and `{requests.<name>.<field>}`
   — and the live page; Save disabled while lint fails) · Page (render or element table,
-  **+ target** per element) · Targets (every strategy's attempt) · **Requests** (each graph
+  **+ target** per element) · Targets (every strategy's attempt) · **Code** (the code actions of
+  the selected node — or pick any node that has some: `script` bodies are tested in the
+  sandbox with args/inputs/vars and show value, console lines, error + details, elapsed and
+  the vars the action would set; `evaluate` bodies run in the session's page; code edits here
+  are a scratch copy, the YAML is what is saved — plus a **Page console**: ad-hoc async JS
+  in the live page, `isolated`/`main` world toggle, frame index, Ctrl+Enter, last 20 results)
+  · **Requests** (each graph
   request with kind, policy and live status; test it standalone or inside the running
   session with inputs/vars, a local-only reveal toggle, and an attempt timeline: outcome,
   status, elapsed, backoff, missing fields, masked request line, body excerpt, extracted
   values) · Events (recognize reasons, transition traces, locate attempts, `request`
-  timelines, `on_fail` routing, failures) · Screenshot.
+  timelines, `script`/`evaluate` results with logs and set vars, console runs, `on_fail`
+  routing, failures) · Screenshot.
 
 ## API (`builder-api`)
 
@@ -73,13 +83,21 @@ Graphs: `GET /graphs`, `POST /graphs`, `GET|PUT|DELETE /graphs/{name}`,
 `PUT|DELETE /graphs/{name}/inputs/{input}`, `POST /graphs/{name}/targets/from-element`,
 `POST /graphs/{name}/requests/{req}/test` `{inputs, vars, credential?, reveal}` →
 `graphwright.testing.run_request` report.
+`POST /graphs/{name}/scripts/test` `{code | node+index, args, inputs, vars, credential?, into?,
+timeout_ms?, memory_mb?, allow_secrets?}` → `graphwright.testing.run_script` report `{ok, value,
+error, details, logs, elapsed_ms, sets}` (sandbox only, no browser; password/credential inputs
+are Secrets, so `allow_secrets` is enforced as in a run).
 
 Sessions: `POST /sessions` `{graph, inputs, fast, credential?}`, `GET|DELETE /sessions/{id}`,
 `POST /sessions/{id}/{step|run|reset|patch|observe|eval}`,
 `POST /sessions/{id}/requests/{req}` `{vars, reveal}` (runs inside the session via
 `GraphSession.run_request`; the event joins the stream and the status feeds `request:`
-conditions), `GET /sessions/{id}/{state|targets|recognize|screenshot|events}`,
-`WS /sessions/{id}/ws`. `GET /schema` is derived from the engine's Pydantic models.
+conditions), `POST /sessions/{id}/evaluate` `{script, args, world: isolated|main, frame, timeout_ms}` →
+`{ok, value, error, elapsed_ms}` (the console: same path as the `evaluate` action, result
+redacted and emitted as an `evaluate` event with `source: console`; busy → 409),
+`GET /sessions/{id}/{state|targets|recognize|screenshot|events}`,
+`WS /sessions/{id}/ws`. `GET /schema` is derived from the engine's Pydantic models (plus
+`node_kinds`, `script_fields`, `evaluate_fields`).
 
 One Chromium per API process, one context per session, launched with the worker's machine
 profile. Behind nginx the prefix `/builder/api` is stripped; the UI always calls
@@ -92,7 +110,7 @@ plus the engine's own settings (`CREDENTIAL_PROVIDER`, `PLUGINS`, …).
 ## Tests
 
 ```bash
-cd builder-api && uv run pytest        # graph store + HTTP API + request endpoints, no browser
+cd builder-api && uv run pytest        # graph store + HTTP API + request/code endpoints, no browser
 cd builder-web && npm run typecheck && npm run build
 ```
 

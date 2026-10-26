@@ -47,6 +47,7 @@ graphwright was extracted from (D-24).
 | 2026-10-25 | D-33 | [API database tests only against a `*_test` database](2026-10-25-D-33-api-database-tests-only-against-a-test-database.md) | implemented | `api` `testing` |
 | 2026-10-25 | D-34 | [Failure evidence is captured from the live page, masked, and stored as artifacts](2026-10-25-D-34-failure-evidence-is-captured-from-the-live-page-masked-and-sto.md) | implemented | `engine` `api` `debugging` `security` |
 | 2026-10-25 | D-35 | [RustFS replaces MinIO as the stack's object store](2026-10-25-D-35-rustfs-replaces-minio-as-the-stack-s-object-store.md) | implemented | `devops` `storage` |
+| 2026-10-25 | D-36 | [Code nodes are sandboxed JavaScript; `evaluate` runs JavaScript in the page](2026-10-25-D-36-code-nodes-are-sandboxed-javascript-evaluate-runs-js-in-the-pa.md) | implemented | `engine` `security` `code` |
 
 ## Open / deferred
 

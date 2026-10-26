@@ -14,12 +14,13 @@ import {
   type TargetReport,
 } from "@/api"
 import { useDialog } from "./dialog"
+import { CodePanel } from "./CodePanel"
 import { RequestCallView, RequestsPanel } from "./RequestsPanel"
 import { Badge } from "./ui"
 import { YamlEditor } from "@/editor/YamlEditor"
 import type { EditorContext, SchemaBundle as EditorSchema } from "@/editor/completions"
 
-type Tab = "node" | "graph" | "requests" | "page" | "targets" | "events" | "shot"
+type Tab = "node" | "graph" | "code" | "requests" | "page" | "targets" | "events" | "shot"
 
 export interface InspectorProps {
   view: GraphView
@@ -51,9 +52,12 @@ export function Inspector(p: InspectorProps) {
   })
 
   const requestCount = Object.keys(p.view.workflow.requests ?? {}).length
+  const codeCount = Object.values(p.view.workflow.nodes).reduce(
+    (n, node) => n + (node.actions ?? []).filter((a) => "script" in a || "evaluate" in a).length, 0)
   const tabs: [Tab, string][] = [
     ["node", "Node"],
     ["graph", "Graph YAML"],
+    ["code", `Code${codeCount ? ` (${codeCount})` : ""}`],
     ["requests", `Requests${requestCount ? ` (${requestCount})` : ""}`],
     ["page", "Page"],
     ["targets", "Targets"],
@@ -76,6 +80,7 @@ export function Inspector(p: InspectorProps) {
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {tab === "node" && <NodeEditor {...p} editorCtx={editorCtx("node")} />}
         {tab === "graph" && <GraphEditor {...p} editorCtx={editorCtx("workflow")} />}
+        {tab === "code" && <CodePanel view={p.view} selected={p.selected} session={p.session} values={p.values} credential={p.credential} onError={p.onError} />}
         {tab === "requests" && <RequestsPanel view={p.view} session={p.session} values={p.values} credential={p.credential} onError={p.onError} />}
         {tab === "page" && <PageView {...p} />}
         {tab === "targets" && <TargetsView sessionId={p.sessionId} view={p.view} events={p.events} />}
@@ -488,6 +493,8 @@ const EVENT_COLOR: Record<string, string> = {
   failure: "text-danger-soft",
   on_fail: "text-warning",
   request: "text-secondary-soft",
+  script: "text-primary-soft",
+  evaluate: "text-secondary-soft",
   move: "text-primary-soft",
   terminal: "text-success",
   transitions: "text-warning",
@@ -503,6 +510,7 @@ function EventsView({ events }: { events: BuilderEvent[] }) {
         const { kind, node, ts, render, ...rest } = e
         void render
         if (kind === "request") return <RequestEvent key={`${ts}-${i}`} node={node} call={rest as unknown as RequestCall} />
+        if (kind === "script" || kind === "evaluate") return <CodeEvent key={`${ts}-${i}`} kind={kind} node={node} data={rest} />
         if (kind === "on_fail") return <OnFailEvent key={`${ts}-${i}`} node={node} to={String(rest.to ?? "")} error={rest.error as Record<string, unknown> | undefined} />
         const raw = (rest.reasons ?? rest.trace ?? rest.attempts ?? rest.details) as unknown[] | undefined
         const lines = raw?.map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
@@ -541,6 +549,32 @@ function RequestEvent({ node, call }: { node: string | null; call: RequestCall }
       <div className="mt-1.5 pb-1">
         <RequestCallView call={call} compact />
       </div>
+    </details>
+  )
+}
+
+function CodeEvent({ kind, node, data }: { kind: string; node: string | null; data: Record<string, unknown> }) {
+  const ok = data.ok !== false
+  const logs = (data.logs as string[] | undefined) ?? []
+  const set = (data.set as string[] | undefined) ?? []
+  const world = data.world as string | undefined
+  return (
+    <details className={`rounded border px-2 py-1 ${ok ? "border-outline-variant bg-recess" : "border-danger/40 bg-danger/5"}`} open={!ok}>
+      <summary className="cursor-pointer">
+        <span className={EVENT_COLOR[kind]}>[{kind}]</span> <span className="text-faint">{node}</span>{" "}
+        <Badge tone={ok ? "success" : "danger"}>{ok ? "ok" : "error"}</Badge>{" "}
+        {world && <Badge tone={world === "main" ? "warning" : "secondary"}>{world}</Badge>}{" "}
+        {data.source === "console" && <Badge tone="zinc">console</Badge>}{" "}
+        <span className="text-muted">
+          {set.length ? `sets ${set.join(", ")}` : ""}
+          {data.elapsed_ms != null ? ` · ${String(data.elapsed_ms)} ms` : ""}
+          {logs.length ? ` · ${logs.length} log line${logs.length === 1 ? "" : "s"}` : ""}
+          {!ok && data.error ? ` · ${String(data.error).split("\n")[0]}` : ""}
+        </span>
+      </summary>
+      {ok && data.value !== undefined && <pre className="mt-1 whitespace-pre-wrap text-on-surface">{JSON.stringify(data.value, null, 2)}</pre>}
+      {!ok && data.error ? <pre className="mt-1 whitespace-pre-wrap text-danger-soft">{String(data.error)}</pre> : null}
+      {logs.length > 0 && <pre className="mt-1 whitespace-pre-wrap text-muted">{logs.join("\n")}</pre>}
     </details>
   )
 }

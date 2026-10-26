@@ -6,7 +6,7 @@ import type { GraphView } from "./api"
 export const NODE_W = 268
 export const NODE_H = 112
 
-export type NodeKind = "step" | "call" | "success" | "outcome" | "failure"
+export type NodeKind = "step" | "code" | "call" | "success" | "outcome" | "failure"
 
 export interface NodeData extends Record<string, unknown> {
   label: string
@@ -26,7 +26,16 @@ export interface NodeData extends Record<string, unknown> {
 export function kindOf(node: GraphView["workflow"]["nodes"][string]): NodeKind {
   if (node.terminal) return node.terminal
   if (node.call) return "call"
+  if (isCodeNode(node)) return "code"
   return "step"
+}
+
+const CODE_VERBS = ["script", "evaluate"]
+
+/** A node whose actions are all code (`script` / `evaluate`) — shown as a code node. */
+export function isCodeNode(node: GraphView["workflow"]["nodes"][string]): boolean {
+  const actions = node.actions ?? []
+  return actions.length > 0 && actions.every((a) => Object.keys(a).some((k) => CODE_VERBS.includes(k)))
 }
 
 // Edge colours follow the design: cyan for plain flow, indigo for conditional, rose for failure routes.

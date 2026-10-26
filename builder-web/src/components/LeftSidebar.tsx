@@ -7,7 +7,7 @@ import { Badge, Check, Icon, Section, cls, readFlag, writeFlag } from "./ui"
 export const INPUT_TYPES = ["string", "password", "email", "date", "number", "url", "otp"]
 // Fields a credential provider usually carries; any other name works too (free text).
 export const CREDENTIAL_FIELDS = ["username", "password", "token", "passphrase", "email"]
-const NODE_KINDS = ["step", "outcome", "success", "failure"]
+const NODE_KINDS = ["step", "code", "outcome", "success", "failure"]
 
 export interface LeftSidebarProps {
   graphs: GraphSummary[]
@@ -163,7 +163,10 @@ function GraphSection(p: LeftSidebarProps) {
             <Icon name="add" size={16} />
           </button>
         </div>
-        <p className={cls.muted}>A step is hooked from the start node so it lints; wire it on the canvas by dragging between ports.</p>
+        <p className={cls.muted}>
+          A step or code node is hooked from the start node so it lints; wire it on the canvas by dragging between ports. A code node runs
+          sandboxed JavaScript over vars (Code tab).
+        </p>
       </div>
     </>
   )

@@ -99,11 +99,32 @@ export interface RequestReport {
   values?: Record<string, unknown>; session?: string
 }
 
+/** `script` action (code node) and `evaluate` action (JS in the page), as saved. */
+export interface ScriptSpec {
+  code: string; args?: Record<string, unknown>; into?: string | null; timeout_ms?: number; memory_mb?: number; allow_secrets?: boolean
+}
+export interface EvaluateSpec {
+  script: string; args?: Record<string, unknown>; into?: string | null; world?: "isolated" | "main"; frame?: number | string
+  timeout_ms?: number; allow_secrets?: boolean
+}
+/** graphwright.testing.run_script — one sandbox run of a code-node body. */
+export interface ScriptReport {
+  ok: boolean; value: unknown; error: string | null; details: string[]; logs: string[]; elapsed_ms: number | null; sets: string[]
+}
+export interface ScriptTestBody {
+  code?: string; node?: string; index?: number; args?: Record<string, unknown>; inputs?: Record<string, string>
+  vars?: Record<string, unknown>; credential?: string; into?: string | null; timeout_ms?: number; memory_mb?: number; allow_secrets?: boolean
+}
+/** One run of the browser console (POST /sessions/{id}/evaluate). */
+export interface ConsoleResult { ok: boolean; value: unknown; error: string | null; elapsed_ms: number }
+export interface ConsoleBody { script: string; args?: Record<string, unknown>; world?: "isolated" | "main"; frame?: number | string; timeout_ms?: number }
+
 // --- graphs --------------------------------------------------------------------------------------
 
 export interface SchemaBundle {
   workflow: unknown; node: unknown; request?: unknown; shapers: string[]; verbs: string[]; condition_kinds: string[]
   strategy_fields: string[]; roles: string[]; request_kinds?: string[]; request_fields?: string[]; extractor_fields?: string[]
+  node_kinds?: string[]; script_fields?: string[]; evaluate_fields?: string[]
 }
 export interface GraphCompletions {
   nodes: string[]; targets: string[]; inputs: string[]; shapers: string[]; macros: string[]
@@ -140,6 +161,7 @@ export const api = {
     deleteEdge: (name: string, source: string, target: string) => req<GraphView>(`/graphs/${name}/edges/${source}/${target}`, { method: "DELETE" }),
     testRequest: (name: string, request: string, body: { inputs: Record<string, string>; vars?: Record<string, unknown>; credential?: string; reveal?: boolean }) =>
       req<RequestReport>(`/graphs/${name}/requests/${request}/test`, json(body)),
+    testScript: (name: string, body: ScriptTestBody) => req<ScriptReport>(`/graphs/${name}/scripts/test`, json(body)),
   },
   sessions: {
     list: () => req<SessionSummary[]>("/sessions"),
@@ -158,6 +180,7 @@ export const api = {
     targets: (id: string) => req<Record<string, TargetReport>>(`/sessions/${id}/targets`),
     recognize: (id: string) => req<Record<string, Recognition>>(`/sessions/${id}/recognize`),
     evaluate: (id: string, condition: Record<string, unknown>) => req<Recognition>(`/sessions/${id}/eval`, json({ condition })),
+    console: (id: string, body: ConsoleBody) => req<ConsoleResult>(`/sessions/${id}/evaluate`, json(body)),
     screenshot: (id: string) => req<{ jpeg_base64: string }>(`/sessions/${id}/screenshot`),
     events: (id: string, since = 0) => req<BuilderEvent[]>(`/sessions/${id}/events?since=${since}`),
     wsUrl: (id: string) => {

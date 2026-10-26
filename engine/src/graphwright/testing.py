@@ -79,3 +79,56 @@ async def run_request(
             if reveal else result.trace()["values"]
         )
     return report
+
+
+async def run_script(
+    wf: Workflow,
+    code: str,
+    *,
+    args: dict[str, Any] | None = None,
+    inputs: dict[str, Any] | None = None,
+    variables: dict[str, Any] | None = None,
+    credential: Credential | None = None,
+    into: str | None = None,
+    timeout_ms: int = 1000,
+    memory_mb: int = 64,
+    allow_secrets: bool = False,
+) -> dict[str, Any]:
+    """Run a code-node body the way the `script` action would — args rendered from
+    the graph's templates, `vars`/`inputs` as non-secret copies — and report the
+    value, console lines, error and timing. What `graphwright script-test` and the
+    builder's code tester call; no browser involved."""
+    from graphwright.engine.dsl import do_script
+    from graphwright.engine.schema import Script
+
+    redactor = Redactor(credential.plaintexts if credential else ())
+    events: list[dict[str, Any]] = []
+    ctx = ActionContext(
+        page=None, observer=None, human=None, workflow=wf,  # type: ignore[arg-type]
+        inputs=_inputs_for(wf, inputs or {}, credential), vars=dict(variables or {}),
+        log=lambda kind, **data: events.append({"kind": kind, **data}),
+        requests=RequestRunner(wf.requests, RequestServices(on_secret=redactor.add)),
+    )
+    error: str | None = None
+    details: list[str] = []
+    try:
+        spec = Script(code=code, args=args or {}, into="__result", timeout_ms=timeout_ms, memory_mb=memory_mb,
+                      allow_secrets=allow_secrets)
+        await do_script(spec, ctx)
+    except EngineError as exc:
+        error, details = str(exc), list(exc.details)
+    event = next((e for e in reversed(events) if e["kind"] == "script"), {})
+    value = ctx.vars.get("__result") if error is None else None
+    if error is None and into is None and not isinstance(value, dict):
+        error = f"without `into` the code must return an object (got {type(value).__name__})"
+    sets = [into] if into else (sorted(value) if isinstance(value, dict) else [])
+    return redactor({
+        "ok": error is None,
+        "value": None if error else "***" if isinstance(value, Secret) or (isinstance(value, dict) and any(isinstance(v, Secret) for v in value.values()))
+        else value,
+        "error": error,
+        "details": details,
+        "logs": event.get("logs", []),
+        "elapsed_ms": event.get("elapsed_ms"),
+        "sets": sets if error is None else [],  # the vars the action would set
+    })

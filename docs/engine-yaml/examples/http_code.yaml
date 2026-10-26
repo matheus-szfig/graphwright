@@ -1,0 +1,44 @@
+workflow: http_code
+version: 1
+portal: acme-records
+inputs:
+  code_url: {type: url, pii: false}
+  service_token: {type: password, credential: token}
+  challenge_id: {type: string}
+requests:
+  otp:
+    kind: http
+    url: "{code_url}"
+    headers: {Authorization: "Bearer {service_token}"}
+    query: {challenge: "{challenge_id}"}
+    extract:
+      code: {json: data.code}
+    retry:
+      attempts: 5
+      backoff_s: [1, 2]
+      until_extracted: true
+outputs:
+  readiness: readiness_v1
+start: obtain
+nodes:
+  obtain:
+    recognize: {always: true}
+    actions:
+      - fetch: {request: otp, into: verification, on_error: continue}
+    transitions:
+      - to: ready
+        when: {request: {name: otp, status: ok}}
+      - to: unavailable
+  ready:
+    recognize: {request: {name: otp, status: ok}}
+    actions:
+      # In a real form, fill with {vars.verification.code} here to avoid refetching.
+      - script:
+          into: readiness
+          code: 'return {available: true};'
+    transitions: [{to: done}]
+  unavailable:
+    terminal: failure
+    result: {status: code_unavailable}
+  done:
+    terminal: success

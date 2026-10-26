@@ -1,0 +1,74 @@
+workflow: login_totp
+version: 1
+portal: acme-records
+risk: protected
+entry_url: "{base_url}/login"
+inputs:
+  base_url: {type: url, pii: false}
+  username: {credential: username}
+  password: {type: password, credential: password}
+requests:
+  otp: {kind: totp}
+outputs:
+  account: account_v1
+start: sign_in
+nodes:
+  sign_in:
+    recognize:
+      all:
+        - url: 're:^/login$'
+        - visible: username_field
+    actions:
+      - fill: {target: username_field, value: "{username}"}
+      - fill: {target: password_field, value: "{password}"}
+      - click: {target: sign_in_button}
+    transitions:
+      - to: invalid_credentials
+        when: {text: 're:invalid username or password'}
+      - to: verify
+        when: {url: 're:^/login/verify'}
+  verify:
+    recognize: {visible: code_field}
+    actions:
+      - fill: {target: code_field, value: "{requests.otp.code}"}
+      - click: {target: verify_button}
+    transitions:
+      - to: dashboard
+        when: {text: 're:^welcome,', in: headings}
+      - to: verify
+        when: {text: 're:invalid verification code'}
+    max_visits: 2
+    on_fail: code_rejected
+  dashboard:
+    recognize: {url: 're:^/account'}
+    actions:
+      - extract:
+          into: account
+          fields:
+            welcome: {css: h1, required: true}
+    transitions:
+      - to: done
+  invalid_credentials:
+    terminal: failure
+    result: {status: invalid_credentials}
+  code_rejected:
+    terminal: failure
+    result: {status: code_rejected}
+  done:
+    terminal: success
+targets:
+  username_field:
+    description: Username textbox
+    strategies: [{role: textbox, name: 're:^username$'}]
+  password_field:
+    description: Password textbox
+    strategies: [{role: textbox, dom_id: 're:^password$'}]
+  sign_in_button:
+    description: Sign in button
+    strategies: [{role: button, name: 're:^sign in$'}]
+  code_field:
+    description: Verification code textbox
+    strategies: [{role: textbox, name: 're:^verification code$'}]
+  verify_button:
+    description: Verify button
+    strategies: [{role: button, name: 're:^verify$'}]

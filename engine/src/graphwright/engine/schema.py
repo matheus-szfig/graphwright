@@ -156,7 +156,7 @@ CONDITION_KEYS: tuple[str, ...] = ("url", "frame_url", "page_type", "visible", "
 builder's completions) can read it — on the class, Pydantic wraps `_KEYS` as a private attr."""
 
 ACTION_VERBS: tuple[str, ...] = ("goto", "click", "fill", "select", "press", "scroll", "wait_for",
-                                 "fetch", "extract", "assert_", "jump", "call")
+                                 "fetch", "extract", "script", "evaluate", "assert_", "jump", "call")
 
 
 class Condition(BaseModel):
@@ -300,6 +300,43 @@ class Fetch(BaseModel):
     on_error: Literal["fail", "continue"] = "fail"
 
 
+class Script(BaseModel):
+    """A code node: sandboxed JavaScript (fresh V8 isolate, no I/O, CPU + memory
+    limits — engine/sandbox.py). `code` is a function body with `args` (rendered from
+    the templates below), `vars` and `inputs` (non-secret copies) and `console` in
+    scope; it `return`s a JSON value. With `into` the value goes to `vars[into]`;
+    without it the returned object's keys are set as vars directly."""
+
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    args: dict[str, Any] = Field(default_factory=dict)  # values may be templates: "{reference}", "{vars.x}"
+    into: str | None = None
+    timeout_ms: int = Field(default=1000, ge=1, le=10_000)
+    memory_mb: int = Field(default=64, ge=8, le=256)
+    # Secrets (credential inputs, sensitive request values) are refused as args unless
+    # this is set; then every string the script returns is treated as a secret too.
+    allow_secrets: bool = False
+
+
+class Evaluate(BaseModel):
+    """Arbitrary JavaScript in the page. `script` is an async function body with `args`
+    in scope; its (awaited) JSON return value goes to `vars[into]`.
+
+    world: `isolated` (default) runs in the observer's CDP isolated world — it sees and
+    can change the DOM, but not the page's own JS globals, and page scripts cannot see
+    it. `main` runs in the page's own context (app state, page functions) — powerful,
+    and observable by the page: prefer `isolated` unless you need the page's JS."""
+
+    model_config = ConfigDict(extra="forbid")
+    script: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    into: str | None = None
+    world: Literal["isolated", "main"] = "isolated"
+    frame: int | str = 0  # frame index, or a pattern matched against frame URLs/routes
+    timeout_ms: int = Field(default=5000, ge=1, le=60_000)
+    allow_secrets: bool = False
+
+
 class Assert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     condition: Condition
@@ -331,6 +368,8 @@ class Action(BaseModel):
     wait_for: WaitFor | None = None
     fetch: Fetch | None = None
     extract: Extract | None = None
+    script: Script | None = None
+    evaluate: Evaluate | None = None
     assert_: Assert | None = Field(default=None, alias="assert")
     jump: Jump | None = None
     call: Call | None = None

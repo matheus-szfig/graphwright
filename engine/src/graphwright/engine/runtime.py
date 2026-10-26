@@ -120,6 +120,11 @@ class GraphSession:
     def workflow(self) -> Workflow:
         return self.graph.workflow
 
+    def emit(self, kind: str, **data: Any) -> Event:
+        """Add an event to the session's stream (redacted, like every other event) —
+        for tools that act on the session from outside a step (the builder console)."""
+        return self._emit(kind, **data)
+
     def redact(self, obj: Any) -> Any:
         """Mask every plaintext secret this session knows (credential values,
         extracted request values) — what every event already goes through."""

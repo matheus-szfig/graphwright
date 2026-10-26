@@ -14,6 +14,9 @@ and see *why* each transition fired.
                                                                        graph requests (2FA…)
 ```
 
+For workflow authors, start with the [YAML language guide](docs/engine-yaml/README.md):
+tutorial, complete reference, 2FA/API recipes, executable examples, and debugging.
+
 ## Quick start
 
 Requirements: Docker, [uv](https://docs.astral.sh/uv/), Node 22+, GNU make (optional — every
@@ -98,6 +101,9 @@ Key ideas (details in `engine/AGENTS.md`):
   lease service, or your own); values live in `Secret` objects and every log, event and
   error column passes through a redactor.
 - **`extract`** reads fields and tables into the run's outputs.
+- **Code nodes** run JavaScript in a sandbox (fresh V8 isolate, no I/O, CPU and memory
+  limits) to turn vars into other vars; **`evaluate`** runs arbitrary JavaScript in the
+  page itself — in an isolated world the page can't see, or in the page's own context.
 - **Failure evidence**: when a run fails, the worker keeps what the page looked like — a
   screenshot (typed secrets masked first), the redacted HTML, the observed PageState and
   the decision trail — in S3 (RustFS in compose), listed at `GET /api/runs/{id}/artifacts`.

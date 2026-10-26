@@ -289,7 +289,8 @@ def test_search_transitions_fire_on_the_alert_and_on_navigation(search_graph, no
 def test_search_graph_edges_for_the_canvas(search_graph) -> None:
     edges = search_graph.edges()
     assert ("search_form", "not_found", "text 're:^no record found'") in edges
-    assert ("record_detail", "done", "always") in edges
+    assert ("record_detail", "summarize", "always") in edges
+    assert ("summarize", "done", "always") in edges
     assert len([e for e in edges if e[0] == "search_form"]) == 2
 
 

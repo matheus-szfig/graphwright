@@ -21,6 +21,7 @@ engine/
 │   │   ├── compiler.py    lint + CompiledGraph (recognize / next / resync / edges)
 │   │   ├── dsl.py         action executors + ActionContext (templates, lazy requests)
 │   │   ├── requests.py    graph requests: http / totp / imap, retry, extract, traces
+│   │   ├── sandbox.py     code nodes: fresh V8 isolate per `script` (no I/O, CPU + memory limits)
 │   │   ├── runtime.py     GraphSession: step()/run()/patch()/reset_to(), events, on_fail routing
 │   │   ├── shapers.py     register_shaper + generic built-ins
 │   │   ├── secrets.py     Secret (prints ***), SecretInputs, Redactor
@@ -48,6 +49,7 @@ engine/
 | Lint code / graphs | `uv run ruff check` · `uv run graphwright lint` |
 | Step a graph in a headed browser | `uv run graphwright step acme_record_search --input base_url=http://127.0.0.1:8090 --headed` |
 | Debug one graph request | `uv run graphwright request-test acme_login_relay_otp otp --input base_url=http://127.0.0.1:8090` |
+| Run a node's code-node script | `uv run graphwright script-test acme_record_search summarize --var 'record={"status":"Active","events":[]}' --var rows_on_page=0` |
 | Worker on the host | `uv run celery -A graphwright.queue.app worker -Q graphwright.runs,graphwright.maintenance --concurrency=1` |
 | Follow a run | `uv run graphwright watch <run-id>` |
 
@@ -125,6 +127,16 @@ config.py · contract.py
   values (`{requests.token.value}`); no cycles.
 - `extract: {into, fields, tables}` reads values; mark the ones that must exist
   `required: true` so a redesign fails loudly. `outputs:` names the vars a run returns.
+- **Code nodes** (D-36): `script: {code, args, into}` runs JavaScript in a sandbox — a
+  function body with `args` (templates; `"{vars.record.events}"` keeps the list),
+  `vars`, `inputs` and `console`, returning JSON into `vars[into]` (or, without `into`,
+  one var per returned key). No I/O at all: computation only. A "code node" is a node
+  whose actions are scripts (`recognize` on the current page, or `always`).
+- **JavaScript in the page**: `evaluate: {script, args, into, world, frame}` — async body,
+  awaited. `world: isolated` (default; DOM yes, page globals no, invisible to the page) or
+  `main` (the page's own JS — reach app state, but the page can notice). Prefer the DSL and
+  `extract`; reach for `evaluate` when the page hides data in JS or needs a nudge.
+  Both refuse secret args unless `allow_secrets: true`.
 - `on_fail: <node>` turns a failure into a transition (`vars._error` holds the record);
   `on_fail: fail` ends the run as failed even for structural errors.
 - Validate with `uv run graphwright lint` (or the builder); step it with

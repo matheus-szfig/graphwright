@@ -1,0 +1,56 @@
+workflow: record_search
+version: 1
+portal: acme-records
+entry_url: "{base_url}/search"
+inputs:
+  base_url: {type: url, pii: false}
+  reference: {type: string, description: Record reference}
+outputs:
+  record: record_v1
+start: search_form
+nodes:
+  search_form:
+    intent: Find a record by reference
+    recognize:
+      all:
+        - url: 're:^/search'
+        - visible: reference_field
+    actions:
+      - fill: {target: reference_field, value: "{reference}", shape: upper}
+      - click: {target: search_button}
+    transitions:
+      - to: not_found
+        when: {text: 're:^no record found'}
+      - to: record_detail
+        when: {url: 're:^/records/'}
+  record_detail:
+    recognize:
+      all:
+        - url: 're:^/records/'
+        - text: 're:^record acm-'
+          in: headings
+    actions:
+      - extract:
+          into: record
+          fields:
+            title: {css: '#record-title', required: true}
+            status: {css: '#record-status'}
+    postconditions:
+      - var: {name: record.title, op: set}
+    transitions:
+      - to: done
+  not_found:
+    terminal: outcome
+    result: {status: not_found}
+  done:
+    terminal: success
+targets:
+  reference_field:
+    description: Reference number textbox
+    strategies:
+      - {role: textbox, name: 're:^reference number$'}
+      - {role: textbox, dom_id: 're:^ref$'}
+  search_button:
+    description: Search button
+    strategies:
+      - {role: button, name: 're:^search$'}

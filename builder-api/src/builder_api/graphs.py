@@ -15,9 +15,11 @@ import yaml
 from graphwright.engine import GraphError, Workflow, compile_workflow
 from graphwright.engine.compiler import lint
 from graphwright.engine.schema import (
+    Action,
     Condition,
     InputSpec,
     Node,
+    Script,
     Strategy,
     Target,
     Transition,
@@ -68,7 +70,7 @@ def _edges(wf: Workflow) -> list[dict[str, str]]:
 
 
 _ITEM_HINTS = {
-    "Action": "empty item — give it a verb: click, fill, select, press, scroll, wait_for, extract, assert, jump, call",
+    "Action": "empty item — give it a verb: click, fill, select, press, scroll, wait_for, goto, fetch, extract, script, evaluate, assert, jump, call",
     "Condition": "empty item — give it a predicate: url, visible, text, frame_url, page_type, var, all, any, not",
     "Transition": "empty item — it needs `to:` (and optionally `when:`)",
     "Strategy": "empty item — it needs at least one of role, name, dom_id, nearby, landmark, css",
@@ -88,6 +90,14 @@ def _friendly(err: dict[str, Any]) -> str:
 
 def _validation_errors(exc: ValidationError) -> list[str]:
     return [_friendly(e) for e in exc.errors()]
+
+
+CODE_NODE_STUB = """// Sandboxed JavaScript (fresh V8 isolate, no network/files). In scope:
+//   args (this action's args, rendered), vars, inputs (non-secret copies), console.
+// Return an object: each key becomes a var (or set `into:` to store it whole).
+return {};
+"""
+NODE_KINDS = ("step", "code", "outcome", "success", "failure")
 
 
 def node_to_yaml(node: Node) -> str:
@@ -208,6 +218,14 @@ class GraphStore:
             # Reachable-from-start is checked by lint, so hook the new node from the
             # start node with an `always` transition at the end (lowest priority).
             node = Node(intent=intent, recognize=Condition(always=True), transitions=[Transition(to=wf.start)])
+            wf.nodes[node_name] = node
+            wf.nodes[wf.start].transitions.append(Transition(to=node_name))
+        elif kind == "code":
+            # A code node: sandboxed JS between pages. Recognize `always` so it runs
+            # wherever the graph is; hooked from start like a step so it lints.
+            script = Script(code=CODE_NODE_STUB, args={}, into=None)
+            node = Node(intent=intent or "code node — derive vars from vars", recognize=Condition(always=True),
+                        actions=[Action(script=script)], transitions=[Transition(to=wf.start)])
             wf.nodes[node_name] = node
             wf.nodes[wf.start].transitions.append(Transition(to=node_name))
         elif kind in ("success", "outcome", "failure"):

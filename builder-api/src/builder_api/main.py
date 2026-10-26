@@ -82,6 +82,31 @@ class SessionRequestBody(BaseModel):
     reveal: bool = False
 
 
+class ScriptTestBody(BaseModel):
+    """Either `code` (+ args/into/limits) or `node` + `index` (the Nth script action
+    of that node, as saved)."""
+
+    code: str | None = None
+    node: str | None = None
+    index: int = 0
+    args: dict[str, Any] = {}
+    inputs: dict[str, Any] = {}
+    vars: dict[str, Any] = {}
+    credential: str | None = None
+    into: str | None = None
+    timeout_ms: int = 1000
+    memory_mb: int = 64
+    allow_secrets: bool = False
+
+
+class ConsoleBody(BaseModel):
+    script: str
+    args: dict[str, Any] = {}
+    world: str = "isolated"
+    frame: int | str = 0
+    timeout_ms: int = 5000
+
+
 class TargetFromElement(BaseModel):
     element: dict[str, Any]
     name: str | None = None
@@ -167,9 +192,11 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
         from graphwright.engine.schema import (
             ACTION_VERBS,
             CONDITION_KEYS,
+            Evaluate,
             Extractor,
             Node,
             RequestSpec,
+            Script,
             Strategy,
             Workflow,
         )
@@ -184,6 +211,9 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
             "request": RequestSpec.model_json_schema(by_alias=True),
             "shapers": sorted(SHAPERS),
             "verbs": [v.rstrip("_") for v in ACTION_VERBS],
+            "node_kinds": list(graphs_mod.NODE_KINDS),
+            "script_fields": list(Script.model_fields),
+            "evaluate_fields": list(Evaluate.model_fields),
             "condition_kinds": [k.rstrip("_") for k in CONDITION_KEYS],
             "request_kinds": list(get_args(RequestSpec.model_fields["kind"].annotation)),
             "request_fields": aliases(RequestSpec),
@@ -261,6 +291,45 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
             wf, request, body.inputs, variables=body.vars, credential=credential,
             services=RequestServices(transport=request_transport), reveal=body.reveal,
         )
+
+    @app.post("/graphs/{name}/scripts/test")
+    async def test_script(name: str, body: ScriptTestBody) -> dict[str, Any]:
+        """Run a code-node body in the sandbox (no browser) with the given
+        inputs/vars — `graphwright.testing.run_script`'s report."""
+        from graphwright.testing import run_script
+
+        from builder_api.sessions import redeem
+
+        wf = store.load(name)
+        code, args, into = body.code, body.args, body.into
+        timeout_ms, memory_mb, allow_secrets = body.timeout_ms, body.memory_mb, body.allow_secrets
+        if code is None:
+            if body.node is None:
+                raise HTTPException(422, "give `code`, or `node` (+ `index`)")
+            node = wf.nodes.get(body.node)
+            if node is None:
+                raise HTTPException(404, f"node {body.node!r} not found")
+            scripts = [a.script for a in node.actions if a.script]
+            if body.index >= len(scripts):
+                raise HTTPException(404, f"node {body.node!r} has {len(scripts)} script action(s)")
+            spec = scripts[body.index]
+            code, into = spec.code, spec.into
+            args = spec.args if not body.args else body.args
+            timeout_ms, memory_mb, allow_secrets = spec.timeout_ms, spec.memory_mb, spec.allow_secrets
+        try:
+            credential = redeem(body.credential)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        # Like a builder session: what the author types for a password/credential
+        # input is a Secret, so `allow_secrets` is enforced the way a run enforces it.
+        from graphwright.engine.secrets import Secret
+
+        inputs = {
+            k: Secret(str(v)) if k in wf.inputs and (wf.inputs[k].credential or wf.inputs[k].type == "password") else v
+            for k, v in body.inputs.items()
+        }
+        return await run_script(wf, code, args=args, inputs=inputs, variables=body.vars, credential=credential,
+                                into=into, timeout_ms=timeout_ms, memory_mb=memory_mb, allow_secrets=allow_secrets)
 
     @app.post("/graphs/{name}/targets/from-element", status_code=201)
     async def target_from_element_ep(name: str, body: TargetFromElement) -> dict[str, Any]:
@@ -381,6 +450,15 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
     async def session_request(sid: str, request: str, body: SessionRequestBody) -> dict[str, Any]:
         """Run a graph request inside a live session (its inputs, vars, credential)."""
         return await _busy_guard(manager.run_request(sid, request, variables=body.vars, reveal=body.reveal))
+
+    @app.post("/sessions/{sid}/evaluate")
+    async def session_evaluate(sid: str, body: ConsoleBody) -> dict[str, Any]:
+        """The builder's browser console: ad-hoc JS in the session's page."""
+        try:
+            return await _busy_guard(manager.console(sid, body.script, args=body.args, world=body.world,
+                                                     frame=body.frame, timeout_ms=body.timeout_ms))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @app.get("/sessions/{sid}/screenshot")
     async def screenshot(sid: str) -> dict[str, str]:

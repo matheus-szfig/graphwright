@@ -1,0 +1,48 @@
+workflow: multiple_platform_codes
+version: 1
+portal: acme-records
+inputs:
+  code_endpoint:
+    type: url
+    pii: false
+    description: Prefix before the credential ID, with no trailing slash
+  platform_token: {type: password, credential: token}
+  credential_a_id: {type: string, pii: false}
+  credential_b_id: {type: string, pii: false}
+requests:
+  code_a:
+    method: POST
+    url: "{code_endpoint}/{credential_a_id}/totp"
+    headers: {Authorization: "Bearer {platform_token}"}
+    extract: {code: {json: code}}
+  code_b:
+    method: POST
+    url: "{code_endpoint}/{credential_b_id}/totp"
+    headers: {Authorization: "Bearer {platform_token}"}
+    extract: {code: {json: code}}
+outputs:
+  readiness: readiness_v1
+start: obtain_a
+nodes:
+  obtain_a:
+    recognize: {always: true}
+    actions:
+      - fetch: {request: code_a, into: first_code}
+    transitions: [{to: obtain_b}]
+    on_fail: unavailable
+  obtain_b:
+    recognize: {request: {name: code_a, status: ok}}
+    actions:
+      - fetch: {request: code_b, into: second_code}
+      - script:
+          into: readiness
+          code: 'return {available: true, sources: 2};'
+    transitions: [{to: done}]
+    on_fail: unavailable
+  unavailable:
+    terminal: failure
+    result: {status: code_unavailable}
+  done:
+    terminal: success
+# For real authentication, fetch each code immediately before its corresponding fill.
+# This example demonstrates independent IDs; it deliberately returns no code in outputs.

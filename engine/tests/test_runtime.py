@@ -87,6 +87,11 @@ class FakeObserver:
     async def value_of(self, element_id: str) -> str | None:
         return None  # skip the typed-value check
 
+    async def evaluate(self, body: str, args=None, *, world: str = "isolated", frame=0):
+        # The example graph's code node counts the table rows on the page.
+        self.evaluated = getattr(self, "evaluated", []) + [(body, world, frame)]
+        return sum(len(rows) for rows in self.tables.values())
+
 
 def fake_page() -> MagicMock:
     page = MagicMock(name="page")
@@ -151,8 +156,14 @@ async def test_full_run_through_the_search_graph_with_extraction(search_graph) -
         "schema": "acme_record_v1", "reference": "ACM-2024-000123", "title": "Warehouse expansion permit",
         "status": "Active", "owner": "Jane Doe", "events": EVENTS,
     }
+    # the code node: evaluate (page) counted the rows, script (sandbox) summarized
+    assert session.result["outputs"]["summary"] == {
+        "event_count": len(EVENTS), "rows_match": True,
+        "last_event": f"{EVENTS[-1]['Date']}: {EVENTS[-1]['Event']}", "status": "active",
+    }
+    assert observer.evaluated[0][1:] == ("isolated", 0)
     kinds = [e.kind for e in session.events]
-    assert kinds.count("move") == 2 and kinds[-1] == "terminal"
+    assert kinds.count("move") == 3 and kinds[-1] == "terminal"
     extract = next(e for e in session.events if e.kind == "extract")
     assert extract.data["values"] == {"reference": "set", "title": "set", "status": "set", "owner": "set", "events": 2}
     # The select went through the isolated world; the fill typed the shaped value.

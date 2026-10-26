@@ -21,6 +21,8 @@ dependencies = [
     "pyyaml>=6.0",
     # engine/requests.py + credentials/http.py — graph requests and HTTP credential leases
     "httpx>=0.27",
+    # engine/sandbox.py — code nodes run in a fresh V8 isolate (no I/O, CPU + memory limits)
+    "mini-racer>=0.12",
 ]
 
 [project.scripts]

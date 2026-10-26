@@ -1,0 +1,29 @@
+workflow: transform
+version: 1
+portal: acme-records
+inputs:
+  date_text: {type: date, pii: false, default: '25/10/2026'}
+outputs:
+  normalized: normalized_date_v1
+start: normalize
+nodes:
+  normalize:
+    recognize: {always: true}
+    actions:
+      - script:
+          into: normalized
+          args: {date: "{date_text}"}
+          code: |
+            const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(args.date);
+            if (!match) return {valid: false, iso: null};
+            return {valid: true, iso: `${match[3]}-${match[2]}-${match[1]}`};
+    transitions:
+      - to: done
+        when: {var: {name: normalized.valid, op: eq, value: true}}
+      - to: invalid_format
+  invalid_format:
+    terminal: outcome
+    result: {status: invalid_format}
+  done:
+    terminal: success
+# This checks the text format, not calendar validity (e.g. 31/02 is still accepted).

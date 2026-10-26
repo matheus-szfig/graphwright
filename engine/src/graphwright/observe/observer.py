@@ -53,6 +53,7 @@ class Observer:
         max_elements: int = 400,
         portal_aliases: dict[str, str] | None = None,
     ) -> None:
+        self.page = page
         self._worlds = IsolatedWorlds(page)
         self._max_elements = max_elements
         self._aliases = portal_aliases
@@ -238,6 +239,38 @@ class Observer:
         """Show bullets instead of a field's value (evidence screenshots)."""
         frame = self._frame_for(element_id)
         return bool(frame and await self._call(frame.id, f"__ps.maskValueOfId({json.dumps(element_id)})"))
+
+    async def evaluate(self, body: str, args: Any = None, *, world: str = "isolated", frame: int | str = 0) -> Any:
+        """Run an async function body with `args` in a frame and return its JSON value.
+
+        isolated: the frame's CDP isolated world (DOM access, invisible to the page).
+        main: the page's own JS context, through Playwright (sees page globals)."""
+        frames = await self._refresh_frames()
+        target = self._pick_frame(frames, frame)
+        if target is None:
+            raise LookupError(f"no frame matches {frame!r}")
+        payload = args if args is not None else {}
+        if world == "isolated":
+            expr = f"(async (args) => {{ {body}\n}})({json.dumps(payload)})"
+            return await self._worlds.evaluate(target.id, expr)
+        pw_frame = self._playwright_frame(target)
+        if pw_frame is None:
+            raise LookupError(f"frame {frame!r} is not reachable from Playwright")
+        return await pw_frame.evaluate(f"async (args) => {{ {body}\n}}", payload)
+
+    def _pick_frame(self, frames: list[FrameRef], spec: int | str) -> FrameRef | None:
+        if isinstance(spec, int):
+            return next((f for f in frames if self._frame_index.get(f.id) == spec), None)
+        from graphwright.engine.schema import Pattern
+        from graphwright.observe.pagestate import route_template
+
+        p = Pattern(spec)
+        return next((f for f in frames if p.test(f.url) or p.test(route_template(f.url)[1])), None)
+
+    def _playwright_frame(self, target: FrameRef) -> Any:
+        if self._frame_index.get(target.id) == 0:
+            return self.page.main_frame
+        return next((f for f in self.page.frames if f.url == target.url), None)
 
     async def close(self) -> None:
         await self._worlds.close()

@@ -6,6 +6,8 @@
     graphwright step GRAPH --input k=v --run     … or run it to the end
     graphwright request-test GRAPH REQUEST --input k=v [--var k=v] [--reveal]
                                                  run one graph request and print every attempt
+    graphwright script-test GRAPH NODE [--index N] --input k=v [--var k=v]
+                                                 run a node's code-node script (sandbox) and print it
     graphwright observe URL [URL ...]            measure the observer on real pages
     graphwright watch RUN_ID                     follow a run's live progress (Redis)
 
@@ -44,6 +46,17 @@ def _kv(pairs: list[str]) -> dict[str, str]:
             raise SystemExit(f"expected name=value, got {kv!r}")
         k, v = kv.split("=", 1)
         out[k] = v
+    return out
+
+
+def _json_kv(pairs: list[str]) -> dict[str, Any]:
+    """name=value where value is JSON when it parses (`n=3`, `x={"a":1}`), else a string."""
+    out: dict[str, Any] = {}
+    for k, v in _kv(pairs).items():
+        try:
+            out[k] = json.loads(v)
+        except ValueError:
+            out[k] = v
     return out
 
 
@@ -226,8 +239,33 @@ async def _request_test(args: argparse.Namespace) -> int:
     graph = compile_workflow(_load(args.graph))
     credential = get_provider().redeem(args.credential, run_id="cli") if args.credential else None
     services = RequestServices(totp=credential.totp if credential else None)
-    report = await run_request(graph.workflow, args.request, _kv(args.input), variables=_kv(args.var),
+    report = await run_request(graph.workflow, args.request, _kv(args.input), variables=_json_kv(args.var),
                                credential=credential, services=services, reveal=args.reveal)
+    _out(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    return 0 if report["ok"] else 1
+
+
+# --- script-test ---------------------------------------------------------------------
+
+
+async def _script_test(args: argparse.Namespace) -> int:
+    from graphwright.credentials import get_provider
+    from graphwright.testing import run_script
+
+    wf = _load(args.graph)
+    node = wf.nodes.get(args.node)
+    if node is None:
+        _out(f"no node {args.node!r}; nodes: {', '.join(wf.nodes)}")
+        return 2
+    scripts = [a.script for a in node.actions if a.script]
+    if not scripts or args.index >= len(scripts):
+        _out(f"node {args.node!r} has {len(scripts)} script action(s)")
+        return 2
+    spec = scripts[args.index]
+    credential = get_provider().redeem(args.credential, run_id="cli") if args.credential else None
+    report = await run_script(wf, spec.code, args=spec.args, inputs=_kv(args.input), variables=_json_kv(args.var),
+                              credential=credential, into=spec.into, timeout_ms=spec.timeout_ms, memory_mb=spec.memory_mb,
+                              allow_secrets=spec.allow_secrets)
     _out(json.dumps(report, indent=2, ensure_ascii=False, default=str))
     return 0 if report["ok"] else 1
 
@@ -345,6 +383,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--credential", help="credential reference for the configured provider")
     p.add_argument("--reveal", action="store_true", help="print extracted secret values (local debugging only)")
     p.set_defaults(fn=lambda a: asyncio.run(_request_test(a)))
+
+    p = sub.add_parser("script-test", help="run a node's code-node script in the sandbox")
+    p.add_argument("graph")
+    p.add_argument("node")
+    p.add_argument("--index", type=int, default=0, help="which script action of the node (default 0)")
+    p.add_argument("--input", action="append", default=[], help="name=value (repeatable)")
+    p.add_argument("--var", action="append", default=[], help="vars.name=value, value as JSON when it parses (repeatable)")
+    p.add_argument("--credential", help="credential reference for the configured provider")
+    p.set_defaults(fn=lambda a: asyncio.run(_script_test(a)))
 
     p = sub.add_parser("observe", help="measure the observer on real pages")
     p.add_argument("urls", nargs="+")
