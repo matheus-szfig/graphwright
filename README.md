@@ -100,6 +100,10 @@ Key ideas (details in `engine/AGENTS.md`):
 - **Credentials** are references resolved by a pluggable provider (`file`, `env`, an HTTP
   lease service, or your own); values live in `Secret` objects and every log, event and
   error column passes through a redactor.
+- **Action readiness**: clicks wait for a clickable, stable target; click/fill support
+  `delay_s`, and `wait_for` supports explicit element states.
+- **Images**: `capture_image` captures rendered pixels; graph HTTP requests call a model
+  using caller-provided inputs. See [images](docs/engine-yaml/images.md).
 - **`extract`** reads fields and tables into the run's outputs.
 - **Code nodes** run JavaScript in a sandbox (fresh V8 isolate, no I/O, CPU and memory
   limits) to turn vars into other vars; **`evaluate`** runs arbitrary JavaScript in the

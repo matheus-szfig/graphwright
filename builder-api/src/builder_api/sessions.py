@@ -23,10 +23,10 @@ from graphwright.engine import Workflow, compile_workflow
 from graphwright.engine.compiler import targets_report
 from graphwright.engine.conditions import evaluate
 from graphwright.engine.errors import EngineError
-from graphwright.engine.requests import RequestServices
 from graphwright.engine.runtime import Event, GraphSession
 from graphwright.engine.schema import Condition
 from graphwright.engine.secrets import Redactor, Secret, SecretInputs
+from graphwright.services import request_services
 
 log = logging.getLogger(__name__)
 
@@ -49,14 +49,37 @@ class LiveSession:
     credential_ref: str | None = None
     subscribers: list[asyncio.Queue] = field(default_factory=list)
     busy: bool = False
+    operation: asyncio.Task | None = None
 
-    def publish(self, ev: Event) -> None:
-        payload = ev.as_dict()
+    _state_pending: bool = field(default=False, init=False)
+
+    def _broadcast(self, payload: dict[str, Any]) -> None:
         for q in list(self.subscribers):
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
                 log.warning("dropping event for slow subscriber")
+
+    def state_message(self) -> dict[str, Any]:
+        s = self.session
+        return {"kind": "session_state", "session": {
+            "id": self.id, "graph": self.graph_name, "node": s.node,
+            "status": s.status, "visits": dict(s.visits), "busy": self.busy,
+            "failure": s.redact(s.failure), "result": s.redact(s.result),
+            "requests": s.request_statuses,
+        }}
+
+    def publish_state(self) -> None:
+        self._state_pending = False
+        self._broadcast(self.state_message())
+
+    def publish(self, ev: Event) -> None:
+        self._broadcast(ev.as_dict())
+        # Move events precede the runtime's node assignment. Publish after this
+        # synchronous turn, coalescing bursts while preserving the event stream.
+        if self.subscribers and not self._state_pending:
+            self._state_pending = True
+            asyncio.get_running_loop().call_soon(self.publish_state)
 
     def summary(self) -> dict[str, Any]:
         s = self.session
@@ -144,7 +167,7 @@ class SessionManager:
         live = LiveSession(id=sid, graph_name=graph_name, graph_path=path, inputs=shown, context=context,
                            page=page, session=None, credential_ref=credential)  # type: ignore[arg-type]
         budget = StealthBudget(scale=0.15) if fast else None
-        services = RequestServices(totp=cred.totp if cred else None, on_secret=redactor.add,
+        services = request_services(totp=cred.totp if cred else None, on_secret=redactor.add,
                                    transport=self.request_transport)
         live.session = GraphSession(graph, page, run_inputs, budget=budget, on_event=live.publish,
                                     redactor=redactor, services=services)
@@ -160,12 +183,17 @@ class SessionManager:
 
     async def _guard(self, live: LiveSession, coro: Any) -> Any:
         if live.busy:
+            coro.close()
             raise RuntimeError("session is busy")
         live.busy = True
+        live.operation = asyncio.current_task()
+        live.publish_state()
         try:
             return await coro
         finally:
+            live.operation = None
             live.busy = False
+            live.publish_state()
 
     async def step(self, sid: str) -> dict[str, Any]:
         live = self.get(sid)
@@ -331,6 +359,9 @@ class SessionManager:
         live = self.sessions.pop(sid, None)
         if live is None:
             return
+        if live.operation and live.operation is not asyncio.current_task():
+            live.operation.cancel()
+            await asyncio.gather(live.operation, return_exceptions=True)
         try:
             await live.session.observer.close()
         except Exception:

@@ -13,6 +13,8 @@ export interface NodeData extends Record<string, unknown> {
   kind: NodeKind
   intent: string
   isStart: boolean
+  hasIncoming: boolean
+  running: boolean
   current: boolean
   recognized: boolean | null
   failed: boolean
@@ -70,6 +72,8 @@ export function toFlow(
         intent: node.intent ?? "",
         isStart: view.workflow.start === name,
         current: opts.current === name,
+        running: opts.current === name && opts.status === "running",
+        hasIncoming: view.edges.some(e => e.to === name),
         recognized: opts.recognized ? (opts.recognized[name]?.ok ?? null) : null,
         failed: opts.failedNode === name,
         visits: opts.visits?.[name] ?? 0,

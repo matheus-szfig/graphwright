@@ -18,6 +18,7 @@ from graphwright.engine.errors import EngineError
 from graphwright.engine.requests import RequestRunner, RequestServices
 from graphwright.engine.schema import Workflow
 from graphwright.engine.secrets import Redactor, Secret, SecretInputs
+from graphwright.services import request_services
 
 
 def _inputs_for(wf: Workflow, provided: dict[str, Any], credential: Credential | None) -> SecretInputs:
@@ -48,7 +49,7 @@ async def run_request(
     if name not in wf.requests:
         return {"ok": False, "request": name, "error": f"unknown request {name!r}", "requests": list(wf.requests)}
     redactor = Redactor(credential.plaintexts if credential else ())
-    services = services or RequestServices()
+    services = services or request_services()
     if services.on_secret is None:
         services.on_secret = redactor.add
     if credential is not None and services.totp is None:
@@ -107,7 +108,7 @@ async def run_script(
         page=None, observer=None, human=None, workflow=wf,  # type: ignore[arg-type]
         inputs=_inputs_for(wf, inputs or {}, credential), vars=dict(variables or {}),
         log=lambda kind, **data: events.append({"kind": kind, **data}),
-        requests=RequestRunner(wf.requests, RequestServices(on_secret=redactor.add)),
+        requests=RequestRunner(wf.requests, request_services(on_secret=redactor.add)),
     )
     error: str | None = None
     details: list[str] = []

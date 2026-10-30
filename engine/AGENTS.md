@@ -180,3 +180,20 @@ config.py · contract.py
 - `docker compose watch` restarts the worker on every `.py` save; an in-flight run is
   redelivered and resumes from a fresh browser (it re-claims the same row).
 - Browser tests are opt-in (`GW_BROWSER_TESTS=1`); they need `uv run playwright install chromium`.
+
+## Runtime boundary and action readiness (D-37)
+
+The engine receives inputs and executes the graph. Keep provider lookup, input-source
+mapping, lease lifecycle, queue/DB/S3 I/O and deployment settings in caller adapters.
+`engine/` must not import `credentials`, `config`, `catalog`, `services`, `tasks`,
+`worker`, `queue`, `storage`, or builder code. `services.request_services()` applies
+deployment settings before calling the runtime. The engine's own request services
+have explicit defaults; embedding does not load a worker environment.
+
+`click` waits up to `timeout_s: 10` for an actionable stable target; zero checks once.
+`click` and `fill` accept `delay_s: 0` before resolution/rendering. `wait_for` accepts
+either `condition` or `target` + `state` (visible, hidden, enabled, disabled, clickable).
+`capture_image` returns a secret PNG data URL plus dimensions/MIME/hash through the
+observer; model requests are ordinary graph HTTP, with no built-in model selection.
+Tests cover clipped expanding menus, image capture/freshness/redaction and isolated
+runtime execution with host imports blocked. See docs/engine-yaml for examples.

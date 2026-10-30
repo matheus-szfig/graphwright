@@ -80,3 +80,6 @@ that a live page or an external service has the expected controls or response co
 
 See [integration](integration.md) for the example validation command, the source files
 behind this manual, and the features specific to this repository.
+
+See [rendered images](images.md) for capture and model requests, and
+[engine embedding](integration.md#engine-and-host-boundary) for the caller boundary.

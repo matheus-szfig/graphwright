@@ -60,8 +60,8 @@ aliases, or credential providers. YAML `imports` is not the plugin loader. Confi
 the same plugins for linting, builder, API catalog, and workers so a saved graph behaves
 consistently everywhere. See [plugins.py](../../engine/src/graphwright/plugins.py).
 
-`fill` has no `literal` override in this distribution. Keep credential/personal-data
-fills templated. `extract` requires fields or tables at lint time; a `schema` label alone
+`fill.literal: true` permits a deliberate non-secret fixed value in a field whose
+name triggers the sensitive-field lint. Keep credentials and personal data templated. `extract` requires fields or tables at lint time; a `schema` label alone
 does not request automatic extraction or validation.
 
 ## Three separate kinds of authentication
@@ -202,3 +202,26 @@ authorization boundaries. The language does not add tenancy isolation.
 
 The common language examples are intentionally customer-independent. Keep real-site
 graphs, credential contracts, and private test fixtures in the consuming project.
+
+## Engine and host boundary
+
+`GraphSession` receives a compiled graph, browser/observer, inputs and optional
+execution services/event callback. It executes graph instructions without resolving
+input provenance. Input names and `credential:` annotations have no acquisition
+meaning to the runtime. Callers can supply the same input from any source.
+
+The worker, builder and CLI adapters resolve credentials, map defaults/fields, manage
+browser sessions and configure request policy before constructing the session. The
+worker owns queue messages, leases, cancellation checks, progress persistence and
+evidence storage. Results and events leave the engine through its public interface.
+
+The engine imports no global settings, credential providers, catalog, Celery, Redis,
+database, object storage, worker or builder modules. Graph-declared browser and HTTP
+actions still perform their intended I/O; worker transport and persistence stay outside.
+`graphwright.services.request_services()` is a caller-side factory that translates
+deployment settings into explicit `RequestServices` options. Direct embedding can
+construct `RequestServices(allowed_hosts="model.example", default_timeout_s=10)`.
+
+Legacy `kind: totp` supports explicit seed computation or a caller-supplied callback;
+the engine never selects a credential or source. Integrations with several sources
+can use ordinary graph HTTP requests and caller-supplied opaque IDs/tokens.

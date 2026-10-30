@@ -80,3 +80,6 @@ make check          # lint + typecheck + tests (what CI runs, minus browser/DB j
   grant for `graphwright_worker` in the same revision.
 - **DB tests only run against a database whose name ends in `_test`** (D-33).
 - Commit or push only when asked.
+
+The reusable `graphwright.engine` receives inputs and executes graphs. Host adapters
+own input acquisition and worker I/O; see engine/AGENTS.md and decision D-37.

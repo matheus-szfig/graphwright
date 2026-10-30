@@ -22,7 +22,6 @@ from builder_api.graphs import (
     GraphSummary,
     GraphView,
     StoreError,
-    node_to_yaml,
 )
 from builder_api.sessions import SessionManager
 
@@ -33,6 +32,16 @@ def yaml_dump(data: Any) -> str:
 # Request bodies. Module level on purpose: with `from __future__ import annotations`
 # FastAPI cannot resolve classes defined inside create_app() and would read them as
 # query parameters.
+
+
+class DeleteSelectionEdge(BaseModel):
+    source: str
+    target: str
+
+
+class DeleteSelectionBody(BaseModel):
+    nodes: list[str]
+    edges: list[DeleteSelectionEdge]
 
 
 class CreateGraph(BaseModel):
@@ -275,7 +284,7 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
         """Run one graph request with the given inputs/vars, outside any browser
         session, with its real retry policy. Every attempt comes back, masked unless
         ``reveal`` (local debugging only)."""
-        from graphwright.engine.requests import RequestServices
+        from graphwright.services import request_services
         from graphwright.testing import run_request
 
         from builder_api.sessions import redeem
@@ -289,7 +298,7 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
             raise HTTPException(422, str(exc)) from None
         return await run_request(
             wf, request, body.inputs, variables=body.vars, credential=credential,
-            services=RequestServices(transport=request_transport), reveal=body.reveal,
+            services=request_services(transport=request_transport), reveal=body.reveal,
         )
 
     @app.post("/graphs/{name}/scripts/test")
@@ -348,11 +357,7 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
 
     @app.get("/graphs/{name}/nodes/{node}")
     async def get_node(name: str, node: str) -> dict[str, Any]:
-        wf = store.load(name)
-        if node not in wf.nodes:
-            raise HTTPException(404, f"node {node!r} not found")
-        return {"name": node, "yaml": node_to_yaml(wf.nodes[node]),
-                "node": wf.nodes[node].model_dump(mode="json", by_alias=True, exclude_none=True)}
+        return store.node_view(name, node)
 
     @app.put("/graphs/{name}/nodes/{node}", response_model=GraphView)
     async def put_node(name: str, node: str, body: YamlBody) -> GraphView:
@@ -365,6 +370,10 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
     @app.post("/graphs/{name}/nodes/{node}/rename", response_model=GraphView)
     async def rename_node(name: str, node: str, body: Rename) -> GraphView:
         return store.rename_node(name, node, body.new_name)
+
+    @app.post("/graphs/{name}/delete-elements", response_model=GraphView)
+    async def delete_elements(name: str, body: DeleteSelectionBody) -> GraphView:
+        return store.delete_elements(name, body.nodes, [edge.model_dump() for edge in body.edges])
 
     @app.delete("/graphs/{name}/nodes/{node}", response_model=GraphView)
     async def delete_node(name: str, node: str) -> GraphView:
@@ -479,6 +488,7 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
         try:
             for ev in manager.events(sid):  # replay history, then live
                 await ws.send_json(ev)
+            await ws.send_json(manager.get(sid).state_message())
             while True:
                 ev = await q.get()
                 await ws.send_json(ev)

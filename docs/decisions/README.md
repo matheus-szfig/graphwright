@@ -49,6 +49,10 @@ graphwright was extracted from (D-24).
 | 2026-10-25 | D-35 | [RustFS replaces MinIO as the stack's object store](2026-10-25-D-35-rustfs-replaces-minio-as-the-stack-s-object-store.md) | implemented | `devops` `storage` |
 | 2026-10-25 | D-36 | [Code nodes are sandboxed JavaScript; `evaluate` runs JavaScript in the page](2026-10-25-D-36-code-nodes-are-sandboxed-javascript-evaluate-runs-js-in-the-pa.md) | implemented | `engine` `security` `code` |
 
+| 2026-10-29 | D-37 | [Caller-owned integration and portable action readiness](2026-10-29-D-37-engine-boundary-and-action-readiness.md) | implemented | `engine` `architecture` `observer` |
+
+| 2026-10-29 | D-38 | [Atomic builder deletion and live session state](2026-10-29-D-38-builder-deletion-and-live-state.md) | implemented | `builder` `authoring` |
+
 ## Open / deferred
 
 - Automated repair tiers (D-03): online one-action repair, offline typed graph patches

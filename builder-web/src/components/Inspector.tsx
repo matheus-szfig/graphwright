@@ -17,6 +17,7 @@ import { useDialog } from "./dialog"
 import { CodePanel } from "./CodePanel"
 import { RequestCallView, RequestsPanel } from "./RequestsPanel"
 import { Badge } from "./ui"
+import { EventLogTools, EventWithCopy } from "./EventTools"
 import { YamlEditor } from "@/editor/YamlEditor"
 import type { EditorContext, SchemaBundle as EditorSchema } from "@/editor/completions"
 
@@ -80,11 +81,11 @@ export function Inspector(p: InspectorProps) {
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {tab === "node" && <NodeEditor {...p} editorCtx={editorCtx("node")} />}
         {tab === "graph" && <GraphEditor {...p} editorCtx={editorCtx("workflow")} />}
-        {tab === "code" && <CodePanel view={p.view} selected={p.selected} session={p.session} values={p.values} credential={p.credential} onError={p.onError} />}
-        {tab === "requests" && <RequestsPanel view={p.view} session={p.session} values={p.values} credential={p.credential} onError={p.onError} />}
+        {tab === "code" && <CodePanel view={p.view} selected={p.selected} session={p.session?.status === "stopped" ? null : p.session} values={p.values} credential={p.credential} onError={p.onError} />}
+        {tab === "requests" && <RequestsPanel view={p.view} session={p.session?.status === "stopped" ? null : p.session} values={p.values} credential={p.credential} onError={p.onError} />}
         {tab === "page" && <PageView {...p} />}
         {tab === "targets" && <TargetsView sessionId={p.sessionId} view={p.view} events={p.events} />}
-        {tab === "events" && <EventsView events={p.events} />}
+        {tab === "events" && <EventsView events={p.events} graph={p.view.name} runId={p.session?.id} />}
         {tab === "shot" && <Screenshot sessionId={p.sessionId} events={p.events} />}
       </div>
     </div>
@@ -502,16 +503,22 @@ const EVENT_COLOR: Record<string, string> = {
   resync: "text-tertiary-soft",
 }
 
-function EventsView({ events }: { events: BuilderEvent[] }) {
+function EventsView({ events, graph, runId }: { events: BuilderEvent[]; graph: string; runId?: string }) {
   if (!events.length) return <p className="text-sm text-muted">No events yet.</p>
-  return (
-    <div className="mono space-y-1 text-[11px]">
-      {[...events].reverse().map((e, i) => {
+  return <div className="mono space-y-1 text-[11px]">
+    <EventLogTools events={events} graph={graph} runId={runId} />
+    {[...events].reverse().map((event, i) => <EventWithCopy key={`${event.ts}-${i}`} event={event}>
+      <EventRow event={event} />
+    </EventWithCopy>)}
+  </div>
+}
+
+function EventRow({ event: e }: { event: BuilderEvent }) {
         const { kind, node, ts, render, ...rest } = e
         void render
-        if (kind === "request") return <RequestEvent key={`${ts}-${i}`} node={node} call={rest as unknown as RequestCall} />
-        if (kind === "script" || kind === "evaluate") return <CodeEvent key={`${ts}-${i}`} kind={kind} node={node} data={rest} />
-        if (kind === "on_fail") return <OnFailEvent key={`${ts}-${i}`} node={node} to={String(rest.to ?? "")} error={rest.error as Record<string, unknown> | undefined} />
+        if (kind === "request") return <RequestEvent key={ts} node={node} call={rest as unknown as RequestCall} />
+        if (kind === "script" || kind === "evaluate") return <CodeEvent key={ts} kind={kind} node={node} data={rest} />
+        if (kind === "on_fail") return <OnFailEvent key={ts} node={node} to={String(rest.to ?? "")} error={rest.error as Record<string, unknown> | undefined} />
         const raw = (rest.reasons ?? rest.trace ?? rest.attempts ?? rest.details) as unknown[] | undefined
         const lines = raw?.map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
         const brief = Object.entries(rest)
@@ -519,7 +526,7 @@ function EventsView({ events }: { events: BuilderEvent[] }) {
           .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
           .join("  ")
         return (
-          <details key={`${ts}-${i}`} className="rounded border border-outline-variant bg-recess px-2 py-1" open={kind === "failure"}>
+          <details key={ts} className="rounded border border-outline-variant bg-recess px-2 py-1" open={kind === "failure"}>
             <summary className="cursor-pointer">
               <span className={EVENT_COLOR[kind] ?? "text-on-surface-variant"}>[{kind}]</span> <span className="text-faint">{node}</span>{" "}
               <span className="text-muted">{brief.slice(0, 160)}</span>
@@ -528,9 +535,6 @@ function EventsView({ events }: { events: BuilderEvent[] }) {
             {rest.spec ? <pre className="mt-1 text-faint">{JSON.stringify(rest.spec)}</pre> : null}
           </details>
         )
-      })}
-    </div>
-  )
 }
 
 function RequestEvent({ node, call }: { node: string | null; call: RequestCall }) {

@@ -19,6 +19,7 @@ export interface PlayerProps {
 }
 
 const STATUS: Record<string, { label: string; dot: string }> = {
+  stopped: { label: "STOPPED", dot: "bg-faint" },
   idle: { label: "IDLE", dot: "bg-faint" },
   paused: { label: "PAUSED", dot: "bg-secondary-soft" },
   running: { label: "RUNNING", dot: "bg-warning animate-pulse" },
@@ -57,12 +58,12 @@ function HudButton({ icon, label, title, onClick, disabled, tone = "default", sh
 /** Floating run/debug toolbar, top-center of the canvas (design: "Canvas Control HUDs"). */
 export function Player(p: PlayerProps) {
   const s = p.session
-  const canAct = !!s && !p.busy && s.status !== "done" && s.status !== "failed"
+  const canAct = !!s && s.status !== "stopped" && !p.busy && s.status !== "done" && s.status !== "failed"
   const st = s ? STATUS[s.status] ?? STATUS.idle : { label: "READY", dot: "bg-success" }
 
   return (
     <div className="hud pointer-events-auto flex items-center gap-1 p-1.5">
-      {!s ? (
+      {!s || s.status === "stopped" ? (
         <>
           <button
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary-soft px-3 text-xs font-semibold text-[#1000a9] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"

@@ -37,6 +37,7 @@ export default function App() {
   const [credential, setCredential] = useState("")
   const [fast, setFast] = useState(true)
   const ws = useRef<WebSocket | null>(null)
+  const stoppedSessions = useRef(new Set<string>())
   const right = useSidebar("right", 520)
   const left = useSidebar("left", 300)
 
@@ -98,6 +99,7 @@ export default function App() {
       api.sessions.state(id).catch(() => null),
       api.sessions.recognize(id).catch(() => undefined),
     ])
+    if (stoppedSessions.current.has(id)) return
     setSession(s)
     if (st) setPage(st)
     setRecognized(rec)
@@ -108,7 +110,13 @@ export default function App() {
     setEvents([])
     const sock = new WebSocket(api.sessions.wsUrl(id))
     sock.onmessage = (m) => {
+      if (ws.current !== sock) return
       const ev = JSON.parse(m.data) as BuilderEvent
+      if (ev.kind === "session_state") {
+        const state = ev.session as Partial<SessionSummary>
+        setSession(prev => prev?.id === id && state.id === id ? { ...prev, ...state } : prev)
+        return
+      }
       setEvents((prev) => [...prev, ev])
     }
     sock.onclose = () => {
@@ -162,17 +170,27 @@ export default function App() {
     [session, loadGraphs, openGraph, notice],
   )
 
-  const sid = session?.id
+  const sid = session?.status === "stopped" ? undefined : session?.id
   const start = () =>
     view &&
     act(async () => {
       const s = await api.sessions.create(view.name, values, fast, credential)
       setSession(s)
+      setPage(null)
+      setRecognized(undefined)
       attach(s.id)
       await refreshSession(s.id)
     })
-  const step = () => sid && act(() => api.sessions.step(sid), () => refreshSession(sid))
-  const run = () => sid && act(() => api.sessions.run(sid), () => refreshSession(sid))
+  const drive = (operation: (id: string) => Promise<unknown>) => sid && !view?.lint.length && act(async () => {
+    try {
+      await operation(sid)
+      if (!stoppedSessions.current.has(sid)) await refreshSession(sid)
+    } catch (error) {
+      if (!stoppedSessions.current.has(sid)) throw error
+    }
+  })
+  const step = () => drive(api.sessions.step)
+  const run = () => drive(api.sessions.run)
 
   // Keyboard: F10 step, F5 run (when a session exists, so the browser's reload is not hijacked otherwise).
   useEffect(() => {
@@ -273,19 +291,11 @@ export default function App() {
             selected={selected}
             onSelect={setSelected}
             onConnect={(s, t) => act(async () => onGraphChanged(await api.graphs.addEdge(view.name, s, t)))}
-            onDeleteEdges={(es) =>
+            onDeleteElements={(selection) =>
               act(async () => {
-                let v = view
-                for (const e of es) v = await api.graphs.deleteEdge(view.name, e.source, e.target)
-                onGraphChanged(v)
-              })
-            }
-            onDeleteNodes={(ns) =>
-              act(async () => {
-                let v = view
-                for (const n of ns) v = await api.graphs.deleteNode(view.name, n)
-                onGraphChanged(v)
-                setSelected(undefined)
+                const updated = await api.graphs.deleteElements(view.name, selection)
+                onGraphChanged(updated)
+                if (selected && selection.nodes.includes(selected)) setSelected(undefined)
               })
             }
           />
@@ -307,10 +317,15 @@ export default function App() {
               onClose={() =>
                 sid &&
                 act(async () => {
+                  // Read the last observed state and complete log before releasing the browser.
+                  await refreshSession(sid).catch(() => undefined)
+                  const log = await api.sessions.events(sid).catch(() => null)
+                  if (log) setEvents(log)
+                  stoppedSessions.current.add(sid)
                   await api.sessions.close(sid)
                   ws.current?.close()
-                  setSession(null)
-                  setRecognized(undefined)
+                  ws.current = null
+                  setSession(prev => prev ? { ...prev, status: "stopped", busy: false } : prev)
                 })
               }
             />

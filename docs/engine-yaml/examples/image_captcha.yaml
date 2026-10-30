@@ -1,0 +1,73 @@
+workflow: image_captcha
+portal: demo-images
+start: challenge
+inputs:
+  vision_url: {type: url, pii: false, description: "Your image-to-text HTTP endpoint"}
+  vision_key: {type: password, description: "Vision service API key supplied by the caller"}
+requests:
+  vision:
+    kind: http
+    method: POST
+    url: "{vision_url}"
+    headers:
+      Authorization: "Bearer {vision_key}"
+    json:
+      image: "{vars.captcha.data_url}"
+      prompt: "Read the four CAPTCHA characters. Return only the characters, preserving case."
+    extract:
+      code: {json: code}
+    sensitive: true
+    cache: none
+    timeout_s: 60
+    retry: {attempts: 1}
+targets:
+  captcha_image:
+    description: CAPTCHA challenge image
+    strategies:
+      - {role: img, name: "re:^Verification image$"}
+      - {css: "#challengeLabel img"}
+  captcha_input:
+    description: CAPTCHA answer field
+    strategies:
+      - {dom_id: "re:^challengeAnswer$"}
+  submit:
+    description: Submit the answer
+    strategies:
+      - {role: button, name: "re:^Submit$"}
+  logged_in:
+    description: Replace this demo marker with a real authenticated-page control
+    strategies:
+      - {dom_id: "re:^authenticatedHome$"}
+nodes:
+  challenge:
+    recognize: {visible: captcha_input}
+    retry: {transient: 0}
+    max_visits: 3
+    on_fail: repair
+    actions:
+      - capture_image: {target: captcha_image, into: captcha}
+      - fetch: {request: vision, into: answer}
+      - script:
+          allow_secrets: true
+          args: {answer: "{vars.answer.code}"}
+          into: decoded
+          code: |
+            const code = args.answer.trim();
+            if (!/^[A-Za-z0-9]{4}$/.test(code)) {
+              throw new Error("Expected exactly four alphanumeric characters");
+            }
+            return {code};
+      - capture_image:
+          target: captcha_image
+          into: captcha_checked
+          expected_sha256: "{vars.captcha.sha256}"
+      - fill: {target: captcha_input, value: "{vars.decoded.code}"}
+      - click: {target: submit}
+    transitions:
+      - {to: done, when: {visible: logged_in}}
+      - to: challenge
+        when: {text: "Invalid verification code"}
+    timeout_s: 15
+  done:
+    terminal: success
+    result: {status: authenticated}

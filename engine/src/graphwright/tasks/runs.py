@@ -24,10 +24,10 @@ from graphwright.config import settings
 from graphwright.contract import TASK_RUN_GRAPH
 from graphwright.credentials import Credential, CredentialRejected, get_provider
 from graphwright.engine.compiler import CompiledGraph
-from graphwright.engine.requests import RequestServices
 from graphwright.engine.runtime import Event, GraphSession
 from graphwright.engine.secrets import Redactor, SecretInputs
 from graphwright.queue.app import celery
+from graphwright.services import request_services
 from graphwright.storage import cache, db
 from graphwright.worker.hooks import get_loop_and_pool
 
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # Event kinds kept in run_event — the decision trail, not every observation.
 DURABLE_EVENTS = frozenset({
     "goto", "move", "jump", "resync", "request", "fill", "select", "extract",
-    "retry", "on_fail", "failure", "terminal", "cancelled",
+    "capture_image", "wait_clickable", "retry", "on_fail", "failure", "terminal", "cancelled",
 })
 _CANCEL_CHECK_EVERY = 1  # steps between cancellation checks (one cheap SELECT)
 
@@ -79,7 +79,7 @@ async def _drive(
         authenticated=credential is not None,
     ) as context:
         page = await context.new_page()
-        services = RequestServices(totp=credential.totp if credential else None, on_secret=redactor.add)
+        services = request_services(totp=credential.totp if credential else None, on_secret=redactor.add)
         session = GraphSession(graph, page, inputs, redactor=redactor, on_event=on_event, services=services)
         try:
             await session.start()

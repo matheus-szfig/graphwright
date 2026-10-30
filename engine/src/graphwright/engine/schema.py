@@ -156,7 +156,7 @@ CONDITION_KEYS: tuple[str, ...] = ("url", "frame_url", "page_type", "visible", "
 builder's completions) can read it — on the class, Pydantic wraps `_KEYS` as a private attr."""
 
 ACTION_VERBS: tuple[str, ...] = ("goto", "click", "fill", "select", "press", "scroll", "wait_for",
-                                 "fetch", "extract", "script", "evaluate", "assert_", "jump", "call")
+                                 "fetch", "extract", "capture_image", "script", "evaluate", "assert_", "jump", "call")
 
 
 class Condition(BaseModel):
@@ -206,14 +206,21 @@ class Goto(BaseModel):
 class Click(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str
+    timeout_s: float = Field(default=10.0, ge=0, allow_inf_nan=False)
+    delay_s: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
 
 class Fill(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str
-    value: str  # template, e.g. "{reference}" or "{requests.otp.code}"
+    value: str  # template, e.g. "{reference}" or "{requests.otp.code}" — or a fixed term when literal is true
     shape: str | None = None  # registered input shaper (engine/shapers.py)
     clear: bool = True
+    delay_s: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    # Opt out of the "no literal in a credential-like field" guard (D-06) when the
+    # fixed value is deliberate and not a secret (a category code, a search term, a
+    # dropdown-filter text). Reviewed in the graph like any other change.
+    literal: bool = False
 
 
 class Select(BaseModel):
@@ -237,8 +244,19 @@ class Scroll(BaseModel):
 
 class WaitFor(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    condition: Condition
-    timeout_s: float = 10.0
+    condition: Condition | None = None
+    target: str | None = None
+    state: Literal["visible", "hidden", "enabled", "disabled", "clickable"] | None = None
+    timeout_s: float = Field(default=10.0, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _wait_mode(self) -> WaitFor:
+        if self.condition is not None:
+            if self.target is not None or self.state is not None:
+                raise ValueError("wait_for accepts condition OR target + state")
+        elif not self.target or self.state is None:
+            raise ValueError("wait_for needs condition or both target and state")
+        return self
 
 
 class FieldSpec(BaseModel):
@@ -298,6 +316,19 @@ class Fetch(BaseModel):
     request: str
     into: str | None = None
     on_error: Literal["fail", "continue"] = "fail"
+
+
+class CaptureImage(BaseModel):
+    """Capture an element's browser-rendered appearance into a runtime variable.
+
+    data_url is a Secret; dimensions, MIME type and sha256 are metadata. Optionally
+    require the same pixel hash as an earlier capture before submitting an answer.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    target: str
+    into: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    expected_sha256: str | None = None
 
 
 class Script(BaseModel):
@@ -368,6 +399,7 @@ class Action(BaseModel):
     wait_for: WaitFor | None = None
     fetch: Fetch | None = None
     extract: Extract | None = None
+    capture_image: CaptureImage | None = None
     script: Script | None = None
     evaluate: Evaluate | None = None
     assert_: Assert | None = Field(default=None, alias="assert")
@@ -464,8 +496,8 @@ class InputSpec(BaseModel):
     required: bool = True
     pii: bool = True  # redact in events/goldens unless explicitly false
     default: Any = None  # used when the run does not provide the input
-    # Fill this input from the run's credential (field name: username, password,
-    # token, …) instead of from the run's inputs. The value arrives as a Secret.
+    # Adapter metadata only: callers may map a provider field to this input.
+    # GraphSession consumes the supplied value without interpreting its source.
     credential: str | None = None
 
 

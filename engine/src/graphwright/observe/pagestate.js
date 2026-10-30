@@ -23,6 +23,8 @@
     "[role=radio]", "[role=tab]", "[role=menuitem]", "[role=option]", "[role=switch]",
     "[onclick]", '[tabindex]:not([tabindex="-1"])', '[contenteditable=""]', '[contenteditable="true"]',
   ].join(",");
+  // Images are targetable evidence even without a click handler.
+  const OBSERVABLE_SEL = INTERACTIVE_SEL + ",img,canvas,[role=img]";
   const HEADING_SEL = "h1,h2,h3,h4,[role=heading]";
   // ARIA live regions plus the class names server-rendered apps commonly use for
   // messages (Bootstrap, JSF/PrimeFaces/RichFaces, ASP.NET validation, i18n variants).
@@ -67,6 +69,7 @@
       case "textarea": return "textbox";
       case "table": return "table";
       case "img": return "img";
+      case "canvas": return "img";
       case "input": {
         const ty = (el.getAttribute("type") || "text").toLowerCase();
         if (ty === "hidden") return null;
@@ -145,7 +148,10 @@
   // A <label for=X> may wrap other controls — some JSF apps put a radio group inside
   // the text field's label. Then X is named by the label's first text piece only.
   function labelText(lab) {
-    if (!lab.querySelector(INTERACTIVE_SEL)) return textOf(lab);
+    if (!lab.querySelector(INTERACTIVE_SEL)) {
+      return textOf(lab) || clip(norm(Array.from(lab.querySelectorAll("img"))
+        .map((img) => img.alt || img.title || "").join(" ")), 80);
+    }
     for (const n of lab.childNodes) {
       if (hasControl(n)) break;
       const s = norm(n.nodeType === 3 ? n.nodeValue : n.textContent);
@@ -282,11 +288,12 @@
     opts = Object.assign({ maxElements: 400, includeHidden: false }, opts || {});
     if (typeof prefix === "string") framePrefix = prefix;
 
-    const candidates = document.querySelectorAll(INTERACTIVE_SEL);
+    const candidates = document.querySelectorAll(OBSERVABLE_SEL);
     const elements = [];
     let hidden = 0;
     for (const el of candidates) {
       const role = roleOf(el);
+      if (role === "img" && el.closest('[aria-hidden="true"]')) { hidden++; continue; }
       if (!role) { hidden++; continue; }
       const vis = visible(el);
       if (!vis) { hidden++; if (!opts.includeHidden) continue; }
@@ -353,7 +360,10 @@
       const cx = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1);
       const cy = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
       const top = document.elementFromPoint(cx, cy);
-      occluded = !!top && !(top === el || el.contains(top) || top.contains(el));
+      // An ancestor hit (e.g. body behind an overflow-clipped menu item) does
+      // not receive a click on behalf of this element. Only the element or a
+      // descendant can deliver the event to it.
+      occluded = !top || !(top === el || el.contains(top));
     }
     return {
       id, visible: vis, in_viewport: inView, occluded,
@@ -363,6 +373,29 @@
   }
 
   // Runtime helpers for the action layer -------------------------------------------
+
+  // Expose the registered node only inside the isolated world so CDP can crop
+  // its browser-rendered box. No selector reconstruction or page mutations.
+  function captureElement(id) {
+    const el = byId.get(id)?.deref();
+    return el && visible(el) ? el : null;
+  }
+
+  function captureCheck(id) {
+    const el = captureElement(id);
+    if (!el) return "element is missing or hidden";
+    const imgs = [...el.querySelectorAll("img")];
+    if (el.tagName.toLowerCase() === "img") imgs.push(el);
+    if (imgs.some(img => visible(img) && (!img.complete || !img.naturalWidth))) return "image is not loaded";
+    const r = el.getBoundingClientRect();
+    if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) return "element is clipped by its frame viewport";
+    for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.1, 0.5, 0.9]) {
+      const stack = document.elementsFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+      const top = stack[0];
+      if (top && !(top === el || el.contains(top) || top.contains(el))) return "element is covered by another element";
+    }
+    return null;
+  }
 
   // Resolve a css/xpath strategy against the live DOM; returns registered ids so the
   // result is addressable like any observed element.
@@ -473,5 +506,5 @@
     } catch (_) { return null; } // cross-origin parent
   }
 
-  globalThis.__ps = { extract, signature, box, frameOffset, query, selectOption, scrollIntoView, valueOfId, textOfId, tableRows, maskValueOfId };
+  globalThis.__ps = { extract, signature, box, frameOffset, query, selectOption, scrollIntoView, valueOfId, textOfId, tableRows, maskValueOfId, captureElement, captureCheck };
 })();

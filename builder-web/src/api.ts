@@ -151,6 +151,8 @@ export const api = {
     putNode: (name: string, node: string, yaml: string) => req<GraphView>(`/graphs/${name}/nodes/${node}`, { method: "PUT", body: JSON.stringify({ yaml }) }),
     addNode: (name: string, node: string, kind = "step", intent = "") => req<GraphView>(`/graphs/${name}/nodes`, json({ name: node, kind, intent })),
     renameNode: (name: string, node: string, newName: string) => req<GraphView>(`/graphs/${name}/nodes/${node}/rename`, json({ new_name: newName })),
+    deleteElements: (name: string, selection: { nodes: string[]; edges: { source: string; target: string }[] }) =>
+      req<GraphView>(`/graphs/${name}/delete-elements`, { method: "POST", body: JSON.stringify(selection) }),
     deleteNode: (name: string, node: string) => req<GraphView>(`/graphs/${name}/nodes/${node}`, { method: "DELETE" }),
     setStart: (name: string, node: string) => req<GraphView>(`/graphs/${name}/start/${node}`, { method: "POST" }),
     putInput: (name: string, input: string, spec: Partial<InputSpec> & { type: string }) =>

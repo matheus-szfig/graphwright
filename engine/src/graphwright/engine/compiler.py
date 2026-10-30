@@ -291,7 +291,7 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
                 errors.append(f"{name}: action #{i} ({a.verb}) references unknown target {a.target!r}")
             if a.fill and a.fill.shape and a.fill.shape not in shapers.SHAPERS:
                 errors.append(f"{name}: action #{i} uses unknown shaper {a.fill.shape!r}")
-            if a.fill and a.fill.value.strip() and not _TEMPLATE_VAR.search(a.fill.value):
+            if a.fill and not a.fill.literal and a.fill.value.strip() and not _TEMPLATE_VAR.search(a.fill.value):
                 target = wf.targets.get(a.fill.target)
                 haystack = a.fill.target + " " + (target.description if target else "")
                 if _SENSITIVE_TARGET.search(haystack):
@@ -334,7 +334,7 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
                         errors.append(f"{name}: action #{i} extract field {fname!r} references unknown target {fs.target!r}")
                 if not a.extract.fields and not a.extract.tables:
                     errors.append(f"{name}: action #{i} extract needs `fields` or `tables`")
-            for attr in ("value", "url", "option"):
+            for attr in ("value", "url", "option", "expected_sha256"):
                 v = getattr(a.body, attr, None)
                 if isinstance(v, str):
                     _check_template(v, f"{name}: action #{i}", wf, errors)

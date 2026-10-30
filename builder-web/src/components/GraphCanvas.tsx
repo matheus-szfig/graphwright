@@ -10,7 +10,6 @@ import {
   useEdgesState,
   useNodesState,
   type Connection,
-  type Edge as RFEdge,
   type Node as RFNode,
   type NodeProps,
 } from "@xyflow/react"
@@ -38,11 +37,11 @@ function GraphNode({ data }: NodeProps<RFNode<NodeData>>) {
       : k.border
   return (
     <div
-      className={`node-card rounded border bg-node text-left ${ring} ${data.current ? "node-running" : ""} ${data.isStart && !data.current && !data.failed ? "border-secondary/60" : ""}`}
+      className={`node-card rounded border bg-node text-left ${ring} ${data.running ? "node-running" : ""} ${data.isStart && !data.current && !data.failed ? "border-secondary/60" : ""}`}
       style={{ width: NODE_W }}
     >
-      {/* The start node is the entry point: nothing flows into it, so no input port. */}
-      {!data.isStart && <Handle type="target" position={Position.Top} />}
+      {/* A retry can return to start; it needs an input handle in that case. */}
+      {(!data.isStart || data.hasIncoming) && <Handle type="target" position={Position.Top} />}
       {/* header bar — the start node gets the design's entry treatment: cyan-tinted header, emerald START tag */}
       <div className={`flex items-center gap-2 rounded-t border-b border-outline-variant px-3 py-2 ${data.isStart ? "bg-[#1e2e3a]" : "bg-node-header"}`}>
         <Icon
@@ -52,7 +51,17 @@ function GraphNode({ data }: NodeProps<RFNode<NodeData>>) {
           className={data.failed ? "text-danger-soft" : data.current || data.isStart ? "text-secondary-soft" : "text-on-surface-variant"}
         />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-on-surface">{data.label}</span>
-        {data.isStart ? (
+        {data.running ? (
+          <span className="label-caps inline-flex items-center gap-1 rounded bg-warning px-1.5 py-0.5 text-[#2b1a00] shadow-[0_0_12px_rgba(245,158,11,0.5)]">
+            <Icon name="autorenew" size={11} className="animate-spin" />
+            running
+          </span>
+        ) : data.current && !data.failed ? (
+          <span className="label-caps inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[#042c33]">
+            <Icon name="my_location" size={11} />
+            here
+          </span>
+        ) : data.isStart ? (
           <span className="label-caps inline-flex items-center gap-1 rounded bg-success px-1.5 py-0.5 text-[#032b1f] shadow-[0_0_12px_rgba(16,185,129,0.45)]">
             <Icon name="bolt" size={11} fill />
             start
@@ -95,8 +104,7 @@ export interface GraphCanvasProps {
   selected?: string
   onSelect: (node: string | undefined) => void
   onConnect: (source: string, target: string) => void
-  onDeleteEdges: (edges: { source: string; target: string }[]) => void
-  onDeleteNodes: (nodes: string[]) => void
+  onDeleteElements: (selection: { nodes: string[]; edges: { source: string; target: string }[] }) => Promise<void>
 }
 
 export function GraphCanvas(p: GraphCanvasProps) {
@@ -132,8 +140,10 @@ export function GraphCanvas(p: GraphCanvasProps) {
       onConnect={onConnect}
       onNodeClick={(_, n) => p.onSelect(n.id)}
       onPaneClick={() => p.onSelect(undefined)}
-      onEdgesDelete={(es: RFEdge[]) => p.onDeleteEdges(es.map((e) => ({ source: e.source, target: e.target })))}
-      onNodesDelete={(ns) => p.onDeleteNodes(ns.map((n) => n.id))}
+      onBeforeDelete={async ({ nodes, edges }) => {
+        await p.onDeleteElements({ nodes: nodes.map(n => n.id), edges: edges.map(e => ({ source: e.source, target: e.target })) })
+        return false // server response updates the canvas; rejected edits leave it intact
+      }}
       deleteKeyCode={["Backspace", "Delete"]}
       fitView
       fitViewOptions={{ padding: 0.25, maxZoom: 1 }}

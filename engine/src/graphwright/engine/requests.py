@@ -15,7 +15,7 @@ extracted. That trace is what the runtime emits as a ``request`` event and what 
 builder's Requests tab and ``graphwright request-test`` show.
 
 Kinds: ``http`` (httpx), ``totp`` (RFC 6238 from a template secret, or the run's
-credential provider), ``imap`` (poll a mailbox for a recent message). Nothing here
+injected callback), ``imap`` (poll a mailbox for a recent message). Nothing here
 knows about nodes; the runtime and dsl own that.
 """
 
@@ -37,11 +37,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from graphwright.config import settings
-from graphwright.credentials.totp import seconds_left, totp
 from graphwright.engine.errors import EngineError
 from graphwright.engine.schema import Extractor, RequestSpec
 from graphwright.engine.secrets import MASK, Secret
+from graphwright.engine.totp import seconds_left, totp
 
 _BODY_EXCERPT = 2000
 _TOTP_MIN_VALIDITY_S = 3.0  # wait for the next window rather than type a code about to expire
@@ -110,11 +109,12 @@ class RequestServices:
     """What a run lends its requests. All optional, so the builder and tests can
     run requests with nothing but inputs."""
 
-    totp: Callable[[], str] | None = None  # the run's credential provider, if it has a seed
+    totp: Callable[[], str] | None = None  # optional caller-supplied code callback (legacy request syntax)
     on_secret: Callable[[str], None] | None = None  # register a plaintext with the run's Redactor
     transport: httpx.AsyncBaseTransport | None = None  # tests: httpx.MockTransport
     run_started: float = field(default_factory=time.time)
-    allowed_hosts: str | None = None  # None = settings.requests_allowed_hosts
+    allowed_hosts: str = ""  # empty permits any host; caller supplies policy
+    default_timeout_s: float = 10.0
     imap_factory: Callable[[str, int], Any] | None = None  # tests: fake IMAP client
 
 
@@ -224,7 +224,7 @@ class RequestRunner:
     # -- http --
 
     def _check_host(self, url: str) -> None:
-        allowed = settings.requests_allowed_hosts if self.services.allowed_hosts is None else self.services.allowed_hosts
+        allowed = self.services.allowed_hosts
         if not allowed.strip():
             return
         host = (urlsplit(url).hostname or "").lower()
@@ -252,7 +252,7 @@ class RequestRunner:
                     (_excerpt(jsonlib.dumps(_render_json(spec.json_body, lambda s: render(s, False)))) if spec.json_body is not None else None),
         }
         shown = {k: v for k, v in shown.items() if v is not None}
-        timeout = spec.timeout_s or settings.requests_default_timeout_s
+        timeout = spec.timeout_s or self.services.default_timeout_s
 
         async def once(attempt: AttemptTrace) -> tuple[dict[str, Any] | None, bool]:
             attempt.request = shown

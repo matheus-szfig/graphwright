@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from graphwright.engine import GraphError, Workflow, compile_workflow
-from graphwright.engine.compiler import lint
+from graphwright.engine import Workflow
+from graphwright.engine.compiler import CompiledGraph, lint
 from graphwright.engine.schema import (
     Action,
     Condition,
     InputSpec,
     Node,
+    RequestSpec,
     Script,
     Strategy,
     Target,
@@ -56,17 +57,37 @@ class StoreError(ValueError):
 
 
 def _edges(wf: Workflow) -> list[dict[str, str]]:
+    # Drawing edges does not compile or approve a graph for execution.
+    return [{"from": a, "to": b, "label": label}
+            for a, b, label in CompiledGraph(wf, {}).edges()
+            if a in wf.nodes and b in wf.nodes]
+
+
+def _display_workflow(name: str, text: str) -> Workflow:
+    """Best-effort canvas model. Never write or execute this repaired projection."""
     try:
-        return [{"from": a, "to": b, "label": lbl} for a, b, lbl in compile_workflow(wf).edges()]
-    except GraphError:
-        # Still draw what we can when the graph does not lint.
-        out = []
-        for name, node in wf.nodes.items():
-            for t in node.transitions:
-                out.append({"from": name, "to": t.to, "label": t.when.kind})
-            if node.then:
-                out.append({"from": name, "to": node.then, "label": f"call {node.call}"})
-        return out
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    wf = Workflow(workflow=name, portal="?", start="", nodes={})
+    for key in ("workflow", "portal", "start", "entry_url"):
+        if isinstance(data.get(key), str):
+            setattr(wf, key, data[key])
+    for field, model in (("nodes", Node), ("targets", Target), ("inputs", InputSpec), ("requests", RequestSpec)):
+        items = data.get(field)
+        if not isinstance(items, dict):
+            continue
+        for key, value in items.items():
+            if not isinstance(key, str):
+                continue
+            try:
+                getattr(wf, field)[key] = model.model_validate(value)
+            except ValidationError:
+                if field == "nodes":
+                    wf.nodes[key] = Node(intent="Invalid node — edit YAML", recognize=Condition(always=True),
+                                         transitions=[Transition(to="")])
+    return wf
 
 
 _ITEM_HINTS = {
@@ -141,11 +162,19 @@ class GraphStore:
             raise StoreError(f"invalid YAML: {exc}") from exc
 
     def view(self, name: str, wf: Workflow | None = None) -> GraphView:
-        wf = wf or self.load(name)
+        path = self._path(name)
+        if not path.exists():
+            raise StoreError(f"graph {name!r} not found", status=404)
+        text = path.read_text(encoding="utf-8")
+        if wf is None:
+            try:
+                wf = Workflow.from_yaml_text(text)
+            except (ValidationError, yaml.YAMLError):
+                wf = _display_workflow(name, text)
         return GraphView(
-            name=name, path=str(self._path(name)), yaml=wf.to_yaml(),
+            name=name, path=str(self._path(name)), yaml=text,
             workflow=wf.model_dump(mode="json", by_alias=True, exclude_none=True),
-            edges=_edges(wf), lint=lint(wf),
+            edges=_edges(wf), lint=self.lint_yaml(text),
         )
 
     def save(self, name: str, wf: Workflow, *, bump_version: bool = False) -> GraphView:
@@ -197,15 +226,22 @@ class GraphStore:
         except yaml.YAMLError as exc:
             return [f"invalid YAML: {exc}"]
 
+    def node_view(self, name: str, node: str) -> dict[str, Any]:
+        data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
+        if node not in data.get("nodes", {}):
+            raise StoreError(f"node {node!r} not found", status=404)
+        value = data["nodes"][node]
+        return {"name": node, "yaml": dump_yaml(value), "node": value}
+
     def put_node(self, name: str, node_name: str, text: str) -> GraphView:
-        wf = self.load(name)
         try:
-            node = Node.model_validate(yaml.safe_load(text) or {})
+            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
+            data["nodes"][node_name] = yaml.safe_load(text)
+            wf = Workflow.model_validate(data)
         except ValidationError as exc:
-            raise StoreError("node does not validate", _validation_errors(exc)) from exc
+            raise StoreError("graph does not validate", _validation_errors(exc)) from exc
         except yaml.YAMLError as exc:
             raise StoreError(f"invalid YAML: {exc}") from exc
-        wf.nodes[node_name] = node
         return self.save(name, wf)
 
     def add_node(self, name: str, node_name: str, kind: str = "step", intent: str = "") -> GraphView:
@@ -260,15 +296,82 @@ class GraphStore:
         return self.save(name, wf)
 
     def delete_node(self, name: str, node_name: str) -> GraphView:
-        wf = self.load(name)
-        if node_name not in wf.nodes:
-            raise StoreError(f"node {node_name!r} not found", status=404)
-        if node_name == wf.start:
-            raise StoreError("cannot delete the start node", status=400)
-        del wf.nodes[node_name]
-        for node in wf.nodes.values():
-            node.transitions = [t for t in node.transitions if t.to != node_name]
-        return self.save(name, wf)
+        return self.delete_elements(name, [node_name], [])
+
+    def delete_elements(self, name: str, nodes: list[str], edges: list[dict[str, str]]) -> GraphView:
+        """Remove one selection and its references in a single saved draft.
+
+        A deletion may leave unreachable nodes or no success terminal. Report lint
+        in the returned view; authors must be able to repair incomplete graphs.
+        """
+        try:
+            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise StoreError(f"graph {name!r} not found", status=404) from None
+        except yaml.YAMLError:
+            raise StoreError("Repair the graph YAML syntax before deleting elements") from None
+        if not isinstance(data, dict) or not isinstance(data.get("nodes"), dict):
+            raise StoreError("Repair the graph nodes mapping before deleting elements")
+        removed = set(nodes)
+        missing = removed - data["nodes"].keys()
+        if missing:
+            raise StoreError(f"node {sorted(missing)[0]!r} not found", status=404)
+        if data.get("start") in removed:
+            raise StoreError("Set another node as start before deleting the start node", status=400)
+        for node_name in removed:
+            del data["nodes"][node_name]
+        for node in data["nodes"].values():
+            if not isinstance(node, dict):
+                continue  # preserve unrelated invalid drafts verbatim as data
+            transitions = node.get("transitions")
+            if isinstance(transitions, list):
+                node["transitions"] = [t for t in transitions
+                                       if not isinstance(t, dict) or t.get("to") not in removed]
+            if node.get("then") in removed:
+                node.pop("then")
+            if node.get("on_fail") in removed:
+                node.pop("on_fail")  # default repair behavior
+            actions = node.get("actions")
+            if isinstance(actions, list):
+                node["actions"] = [a for a in actions if not (
+                    isinstance(a, dict) and isinstance(a.get("jump"), dict)
+                    and a["jump"].get("to") in removed)]
+        for edge in edges:
+            source, target = edge["source"], edge["target"]
+            if source in removed or target in removed:
+                continue  # incident edges were already removed with their node
+            node = data["nodes"].get(source)
+            if not isinstance(node, dict):
+                raise StoreError(f"node {source!r} not found", status=404)
+            transitions = node.get("transitions", [])
+            matches = [i for i, t in enumerate(transitions)
+                       if isinstance(t, dict) and t.get("to") == target]
+            if matches:
+                del transitions[matches[-1]]
+            elif node.get("on_fail") == target:
+                node.pop("on_fail")
+            elif node.get("then") == target:
+                node.pop("then")
+            else:
+                raise StoreError(f"no edge {source!r} to {target!r}", status=404)
+        # Preserve atomic replacement without the save() lint gate for deletions.
+        import os
+        from tempfile import NamedTemporaryFile
+
+        path = self._path(name)
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.dir, suffix=".tmp", delete=False) as out:
+            temp = Path(out.name)
+            try:
+                out.write(dump_yaml(data))
+            except BaseException:
+                out.close()
+                temp.unlink(missing_ok=True)
+                raise
+        try:
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+        return self.view(name)
 
     def add_edge(self, name: str, src: str, dst: str, condition: dict[str, Any] | None = None) -> GraphView:
         wf = self.load(name)
@@ -307,16 +410,12 @@ class GraphStore:
         return self.save(name, wf)
 
     def lint_node_yaml(self, name: str, node_name: str, text: str) -> list[str]:
-        """Lint a node edit without writing: substitute it into the graph and lint."""
         try:
-            node = Node.model_validate(yaml.safe_load(text) or {})
-        except ValidationError as exc:
-            return _validation_errors(exc)
+            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
+            data["nodes"][node_name] = yaml.safe_load(text)
+            return [error.removeprefix(f"nodes.{node_name}.") for error in self.lint_yaml(dump_yaml(data))]
         except yaml.YAMLError as exc:
             return [f"invalid YAML: {exc}"]
-        wf = self.load(name)
-        wf.nodes[node_name] = node
-        return lint(wf)
 
     def completions(self, name: str) -> dict[str, Any]:
         """Graph-aware vocabulary for the editor's autocomplete."""

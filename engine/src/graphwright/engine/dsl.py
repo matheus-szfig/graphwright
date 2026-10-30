@@ -8,6 +8,7 @@ Nothing here knows about nodes or transitions; the runtime owns those.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
@@ -19,7 +20,18 @@ from graphwright.engine.conditions import EvalContext
 from graphwright.engine.errors import JumpSignal, NotActionable, StructuralError, TargetNotFound, TransientError
 from graphwright.engine.requests import RequestFailed, RequestResult, RequestRunner, dependencies
 from graphwright.engine.requests import references as request_references
-from graphwright.engine.schema import Action, Evaluate, Extract, Fetch, Fill, Pattern, Script, Target, Workflow
+from graphwright.engine.schema import (
+    Action,
+    CaptureImage,
+    Evaluate,
+    Extract,
+    Fetch,
+    Fill,
+    Pattern,
+    Script,
+    Target,
+    Workflow,
+)
 from graphwright.engine.secrets import MASK, Secret
 from graphwright.engine.targets import resolve
 from graphwright.observe.observer import ElementBox, Observer
@@ -39,8 +51,8 @@ class ActionContext:
     state: PageState | None = None  # latest observation; executors refresh it as needed
     log: Any = None  # callable(kind: str, **data)
     requests: RequestRunner | None = None
-    # Element ids that received a PII/secret value — masked on the page before a
-    # failure screenshot (graphwright/evidence.py). Shared with the session.
+    # Element ids that received a PII/secret value, shared with the session
+    # so caller-owned evidence capture can mask them before a screenshot.
     sensitive: set[str] = field(default_factory=set)
 
     def emit(self, kind: str, **data: Any) -> None:
@@ -151,6 +163,10 @@ async def actionable_box(element_id: str, ctx: ActionContext, *, allow_disabled:
 
 async def _click(element_id: str, ctx: ActionContext) -> None:
     box = await actionable_box(element_id, ctx)
+    await _click_box(box, ctx)
+
+
+async def _click_box(box: ElementBox, ctx: ActionContext) -> None:
     cx, cy = box.center
     x, y = ctx.human.jitter(cx, cy, box.w, box.h)
     await ctx.human.click_at(x, y)
@@ -195,10 +211,48 @@ async def do_goto(url: str, ctx: ActionContext) -> None:
     ctx.state = None
 
 
-async def do_click(target: str, ctx: ActionContext) -> None:
-    element_id, why = await locate(target, ctx)
+async def _wait_clickable(target: str, ctx: ActionContext, timeout_s: float,
+                          *, operation: str = "click") -> tuple[str, list[str], ElementBox]:
+    """Re-resolve through the observer until uncovered, enabled and geometrically stable.
+
+    Layout animations need a timer: the PageState signature may remain unchanged
+    while the target moves. No mouse input happens during this wait.
+    """
+    started = time.perf_counter()
+    deadline = started + timeout_s
+    previous: ElementBox | None = None
+    polls = 0
+    while True:
+        polls += 1
+        ctx.state = None  # the element may have been replaced since the previous sample
+        try:
+            element_id, why = await locate(target, ctx)
+            box = await actionable_box(element_id, ctx)
+        except (TargetNotFound, NotActionable) as exc:
+            last_error = exc
+            previous = None
+        else:
+            stable = previous is not None and (box.id, box.frame) == (previous.id, previous.frame) and all(
+                abs(getattr(box, key) - getattr(previous, key)) <= 0.5 for key in ("x", "y", "w", "h")
+            )
+            if timeout_s == 0 or stable:
+                if polls > 2:
+                    ctx.emit("wait_clickable", target=target, polls=polls,
+                             elapsed_ms=int((time.perf_counter() - started) * 1000))
+                return element_id, why, box
+            previous = box
+            last_error = NotActionable(f"target {target!r} is not actionable: position or size is not stable")
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise type(last_error)(f"{operation} {target!r} timed out after {timeout_s:g}s: {last_error}",
+                                   details=last_error.details) from last_error
+        await asyncio.sleep(min(0.1, remaining))
+
+
+async def do_click(target: str, ctx: ActionContext, *, timeout_s: float = 10.0) -> None:
+    element_id, why, box = await _wait_clickable(target, ctx, timeout_s)
     ctx.emit("locate", target=target, element=element_id, attempts=why)
-    await _click(element_id, ctx)
+    await _click_box(box, ctx)
     ctx.state = None
 
 
@@ -276,6 +330,33 @@ async def do_wait_for(condition, timeout_s: float, ctx: ActionContext) -> None:
         if remaining <= 0:
             raise StructuralError(f"wait_for timed out after {timeout_s}s", details=m.reasons)
         await ctx.observer.wait_for_change(state.signature or "", min(remaining, 2.0))
+
+
+async def do_wait_for_target(target: str, state: str, timeout_s: float, ctx: ActionContext) -> None:
+    if state == "clickable":
+        await _wait_clickable(target, ctx, timeout_s, operation="wait_for")
+        return
+    deadline = time.perf_counter() + timeout_s
+    while True:
+        ctx.state = None
+        try:
+            element_id, why = await locate(target, ctx)
+            box = await ctx.observer.box(element_id)
+        except TargetNotFound as exc:
+            box, why = None, exc.details
+        matches = {
+            "visible": box is not None and box.visible,
+            "hidden": box is None or not box.visible,
+            "enabled": box is not None and not box.disabled,
+            "disabled": box is not None and box.disabled,
+        }
+        if matches[state]:
+            return
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise StructuralError(f"wait_for {target!r} state {state!r} timed out after {timeout_s:g}s",
+                                  details=why)
+        await asyncio.sleep(min(0.1, remaining))
 
 
 async def do_fetch(spec: Fetch, ctx: ActionContext) -> None:
@@ -443,6 +524,26 @@ def _store_result(into: str | None, value: Any, ctx: ActionContext, verb: str) -
     return list(value)
 
 
+async def do_capture_image(spec: CaptureImage, ctx: ActionContext) -> None:
+    # Resolve expected hash before overwriting `into`, including when it refers
+    # to a previous capture stored under the same variable name.
+    try:
+        expected = await ctx.render(spec.expected_sha256) if spec.expected_sha256 else None
+    finally:
+        ctx.vars.pop(spec.into, None)  # a failed capture cannot leave stale pixels
+    await ctx.fresh_state()
+    element_id, _ = await locate(spec.target, ctx)
+    try:
+        captured = await ctx.observer.capture_image(element_id)
+    except ValueError as exc:
+        raise StructuralError(f"capture_image: {exc}") from None
+    if expected is not None and expected != captured["sha256"]:
+        raise StructuralError("capture_image: image changed since the expected capture")
+    ctx.vars[spec.into] = {**captured, "data_url": _as_secrets(captured["data_url"], ctx)}
+    ctx.emit("capture_image", target=spec.target, into=spec.into,
+             width=captured["width"], height=captured["height"], sha256=captured["sha256"])
+
+
 async def do_script(spec: Script, ctx: ActionContext) -> None:
     import asyncio
 
@@ -517,10 +618,15 @@ async def run_action(action: Action, ctx: ActionContext) -> None:
     verb = action.verb
     body = action.body
     ctx.emit("action", verb=verb, spec=body.model_dump(mode="json", exclude_none=True))
+    if verb in ("click", "fill") and body.delay_s:
+        # Delay before resolving or rendering: lazy OTP requests must still be
+        # fetched at the moment of use, not before an intentional pause.
+        await asyncio.sleep(body.delay_s)
+        ctx.state = None
     if verb == "goto":
         await do_goto(body.url, ctx)
     elif verb == "click":
-        await do_click(body.target, ctx)
+        await do_click(body.target, ctx, timeout_s=body.timeout_s)
     elif verb == "fill":
         await do_fill(body, ctx)
     elif verb == "select":
@@ -530,11 +636,16 @@ async def run_action(action: Action, ctx: ActionContext) -> None:
     elif verb == "scroll":
         await do_scroll(body.target, body.to, body.by, ctx)
     elif verb == "wait_for":
-        await do_wait_for(body.condition, body.timeout_s, ctx)
+        if body.target is not None:
+            await do_wait_for_target(body.target, body.state, body.timeout_s, ctx)
+        else:
+            await do_wait_for(body.condition, body.timeout_s, ctx)
     elif verb == "fetch":
         await do_fetch(body, ctx)
     elif verb == "extract":
         await do_extract(body, ctx)
+    elif verb == "capture_image":
+        await do_capture_image(body, ctx)
     elif verb == "script":
         await do_script(body, ctx)
     elif verb == "evaluate":

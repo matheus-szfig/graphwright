@@ -279,14 +279,15 @@ transactions are created.
 | Verb | Required fields | Optional fields / defaults | Behavior |
 |---|---|---|---|
 | `goto` | `url` | — | Render URL; navigate until DOM content loaded; invalidate cached observation. |
-| `click` | `target` | — | Resolve, check actionability, then humanized click. |
-| `fill` | `target`, `value` | `shape: null`, `clear: true` | Render value, shape if named, click, clear, type, and verify field contents. See integration for any repository-specific fields. |
+| `click` | `target` | `timeout_s: 10.0`, `delay_s: 0.0` | Optional delay, then wait for a visible, enabled, uncovered, stable target and humanized click once. `timeout_s: 0` checks once without waiting for stability. |
+| `fill` | `target`, `value` | `shape: null`, `clear: true`, `delay_s: 0.0`, `literal: false` | Optional delay before resolving/rendering, then shape, click, clear, type, and verify field contents. Use `wait_for` for field readiness. Use `literal: true` only for deliberate non-secret fixed values. |
 | `select` | `target`, `option` | — | Select native option using rendered visible-text pattern. Not a generic custom dropdown driver. |
 | `press` | `key` | `target: null` | Optionally click/focus a target, then send the key/chord, e.g. `Enter` or `Control+a`. |
 | `scroll` | None | `target`, `to: top/bottom`, `by` | Scroll target into view, else top/bottom, else wheel by signed amount. Specify one mode. |
-| `wait_for` | `condition` | `timeout_s: 10.0` | Observe/poll until a condition matches; timeout is structural failure. |
+| `wait_for` | `condition` OR `target` + `state` | `timeout_s: 10.0` | Wait for a condition or a target state (`visible`, `hidden`, `enabled`, `disabled`, `clickable`); timeout is structural failure. Sends no mouse/keyboard input. |
 | `fetch` | `request` | `into: null`, `on_error: fail` | Run request; copy fields to `vars[into or request]`; optionally continue on failure. |
 | `extract` | `into` | `schema`, `fields: {}`, `tables: {}` | Extract fields/tables into one variable; see extraction chapter. |
+| `capture_image` | `target`, `into` | `expected_sha256: null` | Capture rendered pixels as a secret PNG data URL plus dimensions, MIME type and hash; reject a changed hash when requested. See [images](images.md). |
 | `script` | `code` | `args: {}`, `into`, `timeout_ms: 1000`, `memory_mb: 64`, `allow_secrets: false` | Sandboxed synchronous JavaScript; no browser or I/O. |
 | `evaluate` | `script` | `args: {}`, `into`, `world: isolated`, `frame: 0`, `timeout_ms: 5000`, `allow_secrets: false` | Async JavaScript function body in a browser frame. |
 | `assert` | `condition` | `message: ""` | Check the current available observation and fail structurally if false. Does not wait. |
@@ -304,9 +305,38 @@ actions:
 ```
 
 Use `wait_for` when later actions within the same node need a changed state. Prefer
-transition conditions when changing nodes. A fixed sleep action does not exist.
+transition conditions when changing nodes. `click` automatically waits up to ten
+seconds for clickability, including the end of target movement during menu expansion.
+This wait re-resolves the target so DOM replacements do not leave a stale element ID.
+It polls geometry even when the page signature does not change. A fixed sleep action
+does not exist; `delay_s` adds an optional pause specifically before `click` or `fill`.
 `assert` can use the cached observation; use a wait or a state-changing action's refresh
 when you need a newly observed condition.
+
+```yaml
+actions:
+  - click:
+      target: consultar_processos
+      delay_s: 0.3
+      timeout_s: 15
+  - wait_for:
+      target: reference_field
+      state: clickable
+      timeout_s: 15
+  - fill:
+      target: reference_field
+      value: "{reference}"
+      delay_s: 0.2
+```
+
+`delay_s` is measured in seconds and happens before the clickability timeout begins.
+For fills, it also happens before rendering/fetching lazy values such as OTP codes.
+Both timing fields must be finite and nonnegative. `visible` does not imply
+uncovered: use `clickable` to check hit testing and stable geometry. `hidden` also
+matches a missing target; `enabled`/`disabled` require a resolved element and inspect
+its disabled flag. `clickable` may scroll the target into view. The wait itself
+never clicks, fills, or submits a form. Permanent obstruction still produces a
+structural failure at timeout; node-level transient retries do not bypass it.
 
 Shaper names are registered in the engine, not defined by YAML. Consult the builder's
 schema completions and [repository integration](integration.md) for the actual list.

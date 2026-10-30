@@ -156,9 +156,9 @@ async def _step(args: argparse.Namespace) -> int:
     from graphwright.catalog import InputsInvalid, build_inputs
     from graphwright.credentials import get_provider
     from graphwright.engine import GraphError, Workflow, compile_workflow
-    from graphwright.engine.requests import RequestServices
     from graphwright.engine.runtime import GraphSession
     from graphwright.engine.secrets import Redactor
+    from graphwright.services import request_services
 
     path = _workflow_path(args.graph)
     try:
@@ -173,7 +173,7 @@ async def _step(args: argparse.Namespace) -> int:
         _out(str(exc))
         return 2
     redactor = Redactor(credential.plaintexts if credential else ())
-    services = RequestServices(totp=credential.totp if credential else None, on_secret=redactor.add)
+    services = request_services(totp=credential.totp if credential else None, on_secret=redactor.add)
 
     async with async_playwright() as pw:
         browser, context = await _browser_context(pw, headed=args.headed)
@@ -233,12 +233,12 @@ async def _step(args: argparse.Namespace) -> int:
 async def _request_test(args: argparse.Namespace) -> int:
     from graphwright.credentials import get_provider
     from graphwright.engine import compile_workflow
-    from graphwright.engine.requests import RequestServices
+    from graphwright.services import request_services
     from graphwright.testing import run_request
 
     graph = compile_workflow(_load(args.graph))
     credential = get_provider().redeem(args.credential, run_id="cli") if args.credential else None
-    services = RequestServices(totp=credential.totp if credential else None)
+    services = request_services(totp=credential.totp if credential else None)
     report = await run_request(graph.workflow, args.request, _kv(args.input), variables=_json_kv(args.var),
                                credential=credential, services=services, reveal=args.reveal)
     _out(json.dumps(report, indent=2, ensure_ascii=False, default=str))

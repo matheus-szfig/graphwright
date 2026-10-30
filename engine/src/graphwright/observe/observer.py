@@ -14,8 +14,12 @@ engine polls while waiting for a transition.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
+import math
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -190,6 +194,65 @@ class Observer:
         )
 
     # -- runtime helpers (used by engine/dsl.py) --
+
+    async def capture_image(self, element_id: str) -> dict[str, Any]:
+        """Browser-rendered crop of a registered element, independent of DOM src.
+
+        CDP addresses the actual node, including frames, CSS composites and tainted
+        canvases. No image fetching, canvas decoding, or page-world code is used.
+        """
+        frame = self._frame_for(element_id)
+        if frame is None:
+            raise ValueError("image frame is gone")
+        await self._ensure_lib(frame.id)
+        client = await self._worlds.session()
+        remote = await client.send("Runtime.evaluate", {
+            "expression": f"__ps.captureElement({json.dumps(element_id)})",
+            "contextId": await self._worlds.context_for(frame.id),
+            "returnByValue": False,
+        })
+        object_id = remote.get("result", {}).get("objectId")
+        if not object_id:
+            raise ValueError("element is missing or hidden")
+        try:
+            await client.send("DOM.scrollIntoViewIfNeeded", {"objectId": object_id})
+            error = await self._call(frame.id, f"__ps.captureCheck({json.dumps(element_id)})")
+            if error:
+                raise ValueError(error)
+            # Chromium's box model is in main-frame viewport coordinates, also
+            # for a node inside an iframe. Do not guess offsets from DOM src URLs.
+            model = await client.send("DOM.getBoxModel", {"objectId": object_id})
+            quad = model["model"]["border"]
+            x, y = math.floor(min(quad[::2])), math.floor(min(quad[1::2]))
+            width = math.ceil(max(quad[::2])) - x
+            height = math.ceil(max(quad[1::2])) - y
+            if width <= 0 or height <= 0 or width * height > 2_000_000:
+                raise ValueError("capture exceeds pixel limit or is empty")
+            viewport = await self._call(self._frames[0].id,
+                                        "({w: innerWidth, h: innerHeight})")
+            if x < 0 or y < 0 or x + width > viewport["w"] or y + height > viewport["h"]:
+                raise ValueError("element is clipped by the main viewport")
+            pixels = await self.page.screenshot(
+                type="png", scale="css", timeout=5000,
+                clip={"x": x, "y": y, "width": width, "height": height},
+            )
+            # A relayout during screenshot preparation must not silently crop a
+            # different region. Image freshness is checked separately by hash.
+            after = await client.send("DOM.getBoxModel", {"objectId": object_id})
+            if after["model"]["border"] != quad:
+                raise ValueError("element moved during capture; observe and retry")
+            data_url = "data:image/png;base64," + base64.b64encode(pixels).decode("ascii")
+            if len(data_url) > 4_000_000:
+                raise ValueError("capture exceeds byte limit")
+            return {"data_url": data_url, "width": width, "height": height,
+                    "sha256": hashlib.sha256(pixels).hexdigest(), "mime_type": "image/png"}
+        except ValueError:
+            raise
+        except Exception:
+            raise ValueError("browser capture failed; the element or frame may have changed") from None
+        finally:
+            with suppress(Exception):  # navigation can destroy the remote handle
+                await client.send("Runtime.releaseObject", {"objectId": object_id})
 
     def _frame_for(self, element_id: str) -> FrameRef | None:
         index = 0
