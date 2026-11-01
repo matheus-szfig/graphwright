@@ -41,6 +41,13 @@ class _IndentedDumper(yaml.SafeDumper):
         return super().increase_indent(flow, False)
 
 
+def _represent_string(dumper: yaml.SafeDumper, value: str):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
+
+
+_IndentedDumper.add_representer(str, _represent_string)
+
+
 def dump_yaml(data: Any) -> str:
     """The one YAML writer for graphs: indented sequences, insertion order, UTF-8."""
     return yaml.dump(data, Dumper=_IndentedDumper, sort_keys=False, allow_unicode=True, width=100)
@@ -339,7 +346,8 @@ class Script(BaseModel):
     without it the returned object's keys are set as vars directly."""
 
     model_config = ConfigDict(extra="forbid")
-    code: str
+    code: str | None = None
+    ref: str | None = Field(default=None, min_length=1, description="Name of a reusable body in workflow.scripts; mutually exclusive with code.")
     args: dict[str, Any] = Field(default_factory=dict)  # values may be templates: "{reference}", "{vars.x}"
     into: str | None = None
     timeout_ms: int = Field(default=1000, ge=1, le=10_000)
@@ -347,6 +355,12 @@ class Script(BaseModel):
     # Secrets (credential inputs, sensitive request values) are refused as args unless
     # this is set; then every string the script returns is treated as a secret too.
     allow_secrets: bool = False
+
+    @model_validator(mode="after")
+    def source(self) -> Script:
+        if (self.code is None) == (self.ref is None):
+            raise ValueError("Provide exactly one of code or ref")
+        return self
 
 
 class Evaluate(BaseModel):
@@ -359,13 +373,20 @@ class Evaluate(BaseModel):
     and observable by the page: prefer `isolated` unless you need the page's JS."""
 
     model_config = ConfigDict(extra="forbid")
-    script: str
+    script: str | None = None
+    ref: str | None = Field(default=None, min_length=1, description="Name of a reusable body in workflow.scripts; mutually exclusive with script.")
     args: dict[str, Any] = Field(default_factory=dict)
     into: str | None = None
     world: Literal["isolated", "main"] = "isolated"
     frame: int | str = 0  # frame index, or a pattern matched against frame URLs/routes
     timeout_ms: int = Field(default=5000, ge=1, le=60_000)
     allow_secrets: bool = False
+
+    @model_validator(mode="after")
+    def source(self) -> Evaluate:
+        if (self.script is None) == (self.ref is None):
+            raise ValueError("Provide exactly one of script or ref")
+        return self
 
 
 class Assert(BaseModel):
@@ -491,7 +512,7 @@ class Node(BaseModel):
 class InputSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: str = "string"  # free label: string, password, email, date, number, url…
+    type: str = "string"  # free label: string, secure (legacy: password), email, date, number, url…
     description: str = ""
     required: bool = True
     pii: bool = True  # redact in events/goldens unless explicitly false
@@ -611,6 +632,31 @@ class RequestSpec(BaseModel):
         return ["code"] if self.kind == "totp" and not self.extract else list(self.extract)
 
 
+class PageFilter(BaseModel):
+    """Saved Page-tab visibility, never an automation/recognition filter.
+
+    Empty lists mean any; different fields combine with AND. Query is a literal,
+    case-insensitive substring across the displayed element metadata.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    categories: list[Literal["controls", "links", "media", "status", "text", "tables", "structure", "other"]] = Field(
+        default_factory=lambda: ["controls", "links", "media", "status"]
+    )
+    roles: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    states: list[str] = Field(default_factory=list)
+    query: str = ""
+    frame: int | None = Field(default=None, ge=0)
+    visibility: Literal["visible", "hidden", "all"] = "visible"
+    viewport: Literal["all", "inside", "outside"] = "all"
+
+
+class ObservationOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_elements: int = Field(default=2000, ge=1, le=20000)
+
+
 class Workflow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -618,14 +664,28 @@ class Workflow(BaseModel):
     version: int = 1
     portal: str
     risk: Literal["open", "protected"] = "open"
+    resync: Literal["disabled", "global"] = Field(
+        default="disabled",
+        description="On recognition failure: stop/use on_fail, or opt into global recovery in declaration order.",
+    )
     entry_url: str | None = None  # where a fresh run navigates before the start node (template)
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     requests: dict[str, RequestSpec] = Field(default_factory=dict)
+    scripts: dict[str, str] = Field(default_factory=dict, description="Reusable JavaScript function bodies referenced by script/evaluate actions via ref.")
     outputs: dict[str, str] = Field(default_factory=dict)
     start: str
     imports: list[str] = Field(default_factory=list)
     nodes: dict[str, Node]
     targets: dict[str, Target] = Field(default_factory=dict)
+    page_filter: PageFilter = Field(default_factory=PageFilter)
+    observation: ObservationOptions = Field(default_factory=ObservationOptions)
+
+    def script_source(self, spec: Script | Evaluate) -> str:
+        if spec.ref is not None:
+            if spec.ref not in self.scripts:
+                raise ValueError(f"Unknown shared script {spec.ref!r}")
+            return self.scripts[spec.ref]
+        return (spec.code if isinstance(spec, Script) else spec.script) or ""
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> Workflow:

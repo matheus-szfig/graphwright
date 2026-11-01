@@ -89,7 +89,7 @@ async def test_image_to_vision_request_and_submit(page, answer, changed, expecte
     state = await obs.observe()
     image = next(e for e in state.elements if e.role == "img")
     assert image.name == "Verification image"
-    assert not any(e.name == "Logo" for e in state.elements)
+    assert any(e.name == "Logo" and "aria-hidden" in e.states for e in state.elements)
     assert next(e for e in state.elements if e.dom_id == "challengeAnswer").name == image.name
     assert "data:image" not in state.model_dump_json()
     captured = await obs.capture_image(image.id)

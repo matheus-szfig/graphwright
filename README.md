@@ -24,11 +24,11 @@ target is a thin wrapper over a script in `scripts/`).
 
 ```bash
 make setup     # env files from the templates + uv sync / npm ci
-make up        # the whole stack → http://localhost:8080   (API docs: /api/docs)
-make demo      # run the example graphs against the bundled demo site, through the API
+make stack:up  # the whole stack → http://localhost:8080   (API docs: /api/docs)
+make demo:run  # run the example graphs against the bundled demo site, through the API
 ```
 
-`make demo` submits runs of the example graphs in `engine/graphs/` — a public search with
+`make demo:run` submits runs of the example graphs in `engine/graphs/` — a public search with
 extraction, a not-found outcome, a login whose TOTP code is computed at the moment it is
 typed, and a login whose code comes from an HTTP relay that is polled until it answers —
 and streams their progress.
@@ -129,13 +129,19 @@ See `api/AGENTS.md` for every endpoint and `/api/docs` for the OpenAPI UI.
 ## The builder (local only)
 
 ```bash
-make install-browsers
-make builder-local        # API (headed Chromium) + UI → http://localhost:5174/builder/
+make engine:browsers
+make builder:local  # API (headed Chromium) + UI → http://localhost:5174/builder/
 ```
 
 Step a graph against a real browser, watch recognize/transition reasons, generate targets
 from observed elements, edit YAML with schema- and page-aware completions, and test graph
-requests with a per-attempt timeline. Edits are written to `engine/graphs/` (lint-gated).
+requests with a per-attempt timeline. Edits are written to `engine/graphs/`; unfinished
+(invalid) drafts can be saved, but only a graph that compiles can start or patch a session.
+
+The bottom **AI assistant** panel (OpenAI or Claude, your own key) authors nodes, targets,
+requests and code from a chat, with or without a running session. It sees graph
+structure and code but not page text, input values or results, and every change is a
+reviewed proposal. See [docs/engine-yaml/ai-assistant.md](docs/engine-yaml/ai-assistant.md).
 
 ## Repository
 
@@ -148,4 +154,4 @@ requests with a per-attempt timeline. Edits are written to `engine/graphs/` (lin
 | `docs/decisions/` | architecture decisions (ADR log) |
 
 `make help` lists every target; `make check` runs what CI runs (minus the browser and DB jobs,
-which are `make test-engine-browser` and `make test-api-db`).
+which are `make engine:test-browser` and `make api:test-db`).

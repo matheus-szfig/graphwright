@@ -54,7 +54,7 @@ class Observer:
         self,
         page: Any,
         *,
-        max_elements: int = 400,
+        max_elements: int = 2000,
         portal_aliases: dict[str, str] | None = None,
     ) -> None:
         self.page = page
@@ -107,6 +107,9 @@ class Observer:
         return "" if index == 0 else f"f{index}"
 
     # -- public API --
+
+    def set_max_elements(self, limit: int) -> None:
+        self._max_elements = limit
 
     async def observe(self) -> PageState:
         t0 = time.perf_counter()

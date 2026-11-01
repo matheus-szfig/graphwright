@@ -20,6 +20,15 @@ MASK = "***"
 _MIN_LEN = 4  # don't scrub one-character "secrets" out of every string
 
 
+def is_secure_input(spec: Any) -> bool:
+    """The legacy password label remains accepted by every caller."""
+    return bool(spec.credential) or spec.type in ("secure", "password")
+
+
+def is_private_input(spec: Any) -> bool:
+    return is_secure_input(spec) or spec.pii
+
+
 class Secret:
     __slots__ = ("_get",)
 

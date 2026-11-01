@@ -1,14 +1,15 @@
 """Graph store — YAML files in a directory, edited through typed operations.
 
-Every mutation goes: load → change the Workflow model → lint (compile) → write YAML.
-A change that does not lint is rejected with the lint errors and nothing is written,
-which is the same gate an LLM patch will pass through later.
+Saving is an authoring operation, not an execution gate. Raw YAML may be invalid;
+views carry diagnostics and a safe display projection. Only execution compiles.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 import yaml
@@ -19,6 +20,7 @@ from graphwright.engine.schema import (
     Condition,
     InputSpec,
     Node,
+    PageFilter,
     RequestSpec,
     Script,
     Strategy,
@@ -74,6 +76,8 @@ def _display_workflow(name: str, text: str) -> Workflow:
     for key in ("workflow", "portal", "start", "entry_url"):
         if isinstance(data.get(key), str):
             setattr(wf, key, data[key])
+    if isinstance(data.get("scripts"), dict):
+        wf.scripts = {k: v for k, v in data["scripts"].items() if isinstance(k, str) and isinstance(v, str)}
     for field, model in (("nodes", Node), ("targets", Target), ("inputs", InputSpec), ("requests", RequestSpec)):
         items = data.get(field)
         if not isinstance(items, dict):
@@ -162,10 +166,8 @@ class GraphStore:
             raise StoreError(f"invalid YAML: {exc}") from exc
 
     def view(self, name: str, wf: Workflow | None = None) -> GraphView:
-        path = self._path(name)
-        if not path.exists():
-            raise StoreError(f"graph {name!r} not found", status=404)
-        text = path.read_text(encoding="utf-8")
+        text = self.read_text(name)
+        errors = self.lint_yaml(text)
         if wf is None:
             try:
                 wf = Workflow.from_yaml_text(text)
@@ -174,16 +176,59 @@ class GraphStore:
         return GraphView(
             name=name, path=str(self._path(name)), yaml=text,
             workflow=wf.model_dump(mode="json", by_alias=True, exclude_none=True),
-            edges=_edges(wf), lint=self.lint_yaml(text),
+            edges=_edges(wf), lint=errors,
         )
 
+    def read_text(self, name: str) -> str:
+        path = self._path(name)
+        if not path.exists():
+            raise StoreError(f"graph {name!r} not found", status=404)
+        return path.read_text(encoding="utf-8")
+
+    def _write_text(self, name: str, text: str) -> None:
+        path = self._path(name)
+        # Readers (including workers) see either saved version, never a truncated
+        # file while the editor writes. The temporary file is on the same volume.
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.dir, suffix=".tmp", delete=False) as out:
+            temp = Path(out.name)
+            try:
+                out.write(text)
+            except BaseException:
+                out.close()
+                temp.unlink(missing_ok=True)
+                raise
+        try:
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def _document(self, name: str) -> dict[str, Any]:
+        try:
+            data = yaml.safe_load(self.read_text(name))
+        except yaml.YAMLError as exc:
+            raise StoreError("Repair the graph YAML syntax before editing individual nodes") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("nodes"), dict):
+            raise StoreError("Repair the graph's nodes mapping in Graph YAML first")
+        return data
+
+    def node_view(self, name: str, node: str) -> dict[str, Any]:
+        data = self._document(name)
+        if node not in data["nodes"]:
+            raise StoreError(f"node {node!r} not found", status=404)
+        value = data["nodes"][node]
+        try:
+            parsed = Node.model_validate(value)
+            text = node_to_yaml(parsed)
+            shown = parsed.model_dump(mode="json", by_alias=True, exclude_none=True)
+        except ValidationError:
+            text = value if isinstance(value, str) else dump_yaml(value)
+            shown = {}
+        return {"name": node, "yaml": text, "node": shown}
+
     def save(self, name: str, wf: Workflow, *, bump_version: bool = False) -> GraphView:
-        errors = lint(wf)
-        if errors:
-            raise StoreError("graph does not lint", errors)
         if bump_version:
             wf.version += 1
-        self._path(name).write_text(wf.to_yaml(), encoding="utf-8")
+        self._write_text(name, wf.to_yaml())
         return self.view(name, wf)
 
     # -- typed operations --
@@ -210,13 +255,8 @@ class GraphStore:
         p.unlink()
 
     def put_yaml(self, name: str, text: str) -> GraphView:
-        try:
-            wf = Workflow.from_yaml_text(text)
-        except ValidationError as exc:
-            raise StoreError("graph does not validate", _validation_errors(exc)) from exc
-        except yaml.YAMLError as exc:
-            raise StoreError(f"invalid YAML: {exc}") from exc
-        return self.save(name, wf)
+        self._write_text(name, text)
+        return self.view(name)
 
     def lint_yaml(self, text: str) -> list[str]:
         try:
@@ -226,23 +266,16 @@ class GraphStore:
         except yaml.YAMLError as exc:
             return [f"invalid YAML: {exc}"]
 
-    def node_view(self, name: str, node: str) -> dict[str, Any]:
-        data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
-        if node not in data.get("nodes", {}):
-            raise StoreError(f"node {node!r} not found", status=404)
-        value = data["nodes"][node]
-        return {"name": node, "yaml": dump_yaml(value), "node": value}
-
     def put_node(self, name: str, node_name: str, text: str) -> GraphView:
+        data = self._document(name)
         try:
-            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
-            data["nodes"][node_name] = yaml.safe_load(text)
-            wf = Workflow.model_validate(data)
-        except ValidationError as exc:
-            raise StoreError("graph does not validate", _validation_errors(exc)) from exc
-        except yaml.YAMLError as exc:
-            raise StoreError(f"invalid YAML: {exc}") from exc
-        return self.save(name, wf)
+            value = yaml.safe_load(text)
+        except yaml.YAMLError:
+            # Preserve a malformed fragment as a scalar at its node key. It is
+            # intentionally schema-invalid, but other nodes remain editable.
+            value = text
+        data["nodes"][node_name] = value
+        return self.put_yaml(name, dump_yaml(data))
 
     def add_node(self, name: str, node_name: str, kind: str = "step", intent: str = "") -> GraphView:
         if not _NAME.match(node_name):
@@ -304,18 +337,11 @@ class GraphStore:
         A deletion may leave unreachable nodes or no success terminal. Report lint
         in the returned view; authors must be able to repair incomplete graphs.
         """
-        try:
-            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise StoreError(f"graph {name!r} not found", status=404) from None
-        except yaml.YAMLError:
-            raise StoreError("Repair the graph YAML syntax before deleting elements") from None
-        if not isinstance(data, dict) or not isinstance(data.get("nodes"), dict):
-            raise StoreError("Repair the graph nodes mapping before deleting elements")
+        data = self._document(name)
         removed = set(nodes)
         missing = removed - data["nodes"].keys()
         if missing:
-            raise StoreError(f"node {sorted(missing)[0]!r} not found", status=404)
+            raise StoreError(f"node {min(missing)!r} not found", status=404)
         if data.get("start") in removed:
             raise StoreError("Set another node as start before deleting the start node", status=400)
         for node_name in removed:
@@ -354,23 +380,7 @@ class GraphStore:
                 node.pop("then")
             else:
                 raise StoreError(f"no edge {source!r} to {target!r}", status=404)
-        # Preserve atomic replacement without the save() lint gate for deletions.
-        import os
-        from tempfile import NamedTemporaryFile
-
-        path = self._path(name)
-        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.dir, suffix=".tmp", delete=False) as out:
-            temp = Path(out.name)
-            try:
-                out.write(dump_yaml(data))
-            except BaseException:
-                out.close()
-                temp.unlink(missing_ok=True)
-                raise
-        try:
-            os.replace(temp, path)
-        finally:
-            temp.unlink(missing_ok=True)
+        self._write_text(name, dump_yaml(data))
         return self.view(name)
 
     def add_edge(self, name: str, src: str, dst: str, condition: dict[str, Any] | None = None) -> GraphView:
@@ -410,27 +420,43 @@ class GraphStore:
         return self.save(name, wf)
 
     def lint_node_yaml(self, name: str, node_name: str, text: str) -> list[str]:
+        """Lint a node edit without writing: substitute it into the graph and lint."""
         try:
-            data = yaml.safe_load(self._path(name).read_text(encoding="utf-8"))
-            data["nodes"][node_name] = yaml.safe_load(text)
-            return [error.removeprefix(f"nodes.{node_name}.") for error in self.lint_yaml(dump_yaml(data))]
+            node = Node.model_validate(yaml.safe_load(text) or {})
+        except ValidationError as exc:
+            return _validation_errors(exc)
         except yaml.YAMLError as exc:
             return [f"invalid YAML: {exc}"]
+        data = self._document(name)
+        data["nodes"][node_name] = node.model_dump(mode="json", by_alias=True, exclude_none=True)
+        return self.lint_yaml(dump_yaml(data))
 
     def completions(self, name: str) -> dict[str, Any]:
         """Graph-aware vocabulary for the editor's autocomplete."""
         from graphwright.engine.shapers import SHAPERS
 
-        wf = self.load(name)
+        wf = Workflow.model_validate(self.view(name).workflow)
         return {
             "nodes": list(wf.nodes),
             "targets": list(wf.targets),
             "inputs": list(wf.inputs),
             # request name → the fields a template can read: {requests.<name>.<field>}
             "requests": {k: r.fields for k, r in wf.requests.items()},
+            "scripts": list(wf.scripts),
             "shapers": sorted(SHAPERS),
             "macros": [],
         }
+
+    def put_page_filter(self, name: str, value: PageFilter, expected: PageFilter) -> GraphView:
+        data = self._document(name)
+        try:
+            current = PageFilter.model_validate(data.get("page_filter", {}))
+        except ValidationError:
+            raise StoreError("Repair page_filter in Graph YAML first") from None
+        if current != expected:
+            raise StoreError("Page filters changed. Load graph defaults before saving again.", status=409)
+        data["page_filter"] = value.model_dump(mode="json")
+        return self.put_yaml(name, dump_yaml(data))
 
     def add_target(self, name: str, target_name: str, target: Target) -> GraphView:
         if not _NAME.match(target_name):
@@ -440,6 +466,55 @@ class GraphStore:
             raise StoreError(f"target {target_name!r} already exists", status=409)
         wf.targets[target_name] = target
         return self.save(name, wf)
+
+    def target_views(self, name: str) -> dict[str, Any]:
+        data = self._document(name)
+        targets = data.get("targets", {})
+        if not isinstance(targets, dict):
+            raise StoreError("Repair the targets mapping in Graph YAML first")
+        def references(value, target, path=""):
+            found = []
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    location = f"{path}.{key}" if path else str(key)
+                    if key in ("target", "visible", "hidden") and child == target:
+                        found.append(location)
+                    else:
+                        found.extend(references(child, target, location))
+            elif isinstance(value, list):
+                for i, child in enumerate(value):
+                    found.extend(references(child, target, f"{path}[{i}]"))
+            return found
+        return {key: {"yaml": dump_yaml(value),
+                      "description": value["description"] if isinstance(value, dict) and isinstance(value.get("description"), str) else "",
+                      "references": references(data.get("nodes", {}), key, "nodes")}
+                for key, value in targets.items()}
+
+    def put_target(self, name: str, target: str, text: str, expected: str | None = None) -> GraphView:
+        if not _NAME.fullmatch(target):
+            raise StoreError("invalid target name (use snake_case)", status=400)
+        data = self._document(name)
+        targets = data.setdefault("targets", {})
+        if not isinstance(targets, dict):
+            raise StoreError("Repair the targets mapping in Graph YAML first")
+        current = dump_yaml(targets[target]) if target in targets else ""
+        if expected is not None and current != expected:
+            raise StoreError("Target changed since this edit started. Reload it before saving.", status=409)
+        try:
+            value = yaml.safe_load(text)
+        except yaml.YAMLError:
+            value = text  # retain malformed drafts, as node editing does
+        targets[target] = value
+        return self.put_yaml(name, dump_yaml(data))
+
+    def delete_target(self, name: str, target: str) -> GraphView:
+        data = self._document(name)
+        targets = data.get("targets", {})
+        if not isinstance(targets, dict) or target not in targets:
+            raise StoreError("target not found", status=404)
+        del targets[target]
+        # Keep referencing actions visible; lint blocks execution until repaired.
+        return self.put_yaml(name, dump_yaml(data))
 
     def put_input(self, name: str, input_name: str, spec: InputSpec) -> GraphView:
         if not _NAME.match(input_name):
@@ -512,13 +587,15 @@ def target_from_element(element: dict[str, Any], name: str | None = None) -> tup
     if nearby:
         extra = {"landmark": "re:" + re.escape(landmark.split("#", 1)[-1])} if "#" in landmark else {}
         strategies.append(Strategy(role=role, nearby=_anchored(nearby[0]), **extra))
+    if element.get("css_path"):
+        strategies.append(Strategy(css=element["css_path"]))
     if not strategies:
         strategies.append(Strategy(role=role, landmark=landmark or None, in_viewport=True) if landmark else Strategy(role=role))
 
     label = acc_name or (nearby[0] if nearby else "") or dom_id or role
     target_name = name or _slug(label, f"{role}_{element.get('id', 'x')}")
     description = f"{role} “{label}”" + (f" in {landmark}" if landmark else "")
-    return target_name, Target(description=description, strategies=strategies)
+    return target_name, Target(description=description, strategies=strategies, frame=element.get("frame", "any"))
 
 
 def recognize_from_state(state: dict[str, Any], *, max_elements: int = 3) -> Condition:
@@ -536,6 +613,8 @@ def recognize_from_state(state: dict[str, Any], *, max_elements: int = 3) -> Con
     for e in state.get("elements") or []:
         if picked >= max_elements:
             break
+        if e.get("category", "controls") != "controls":
+            continue
         if not e.get("in_viewport") or e.get("role") in ("link", "generic", "img", "clickable"):
             continue
         lm = (e.get("landmark") or "").split("#", 1)[0]

@@ -12,7 +12,7 @@ Existing targets are left alone unless ``--force`` (no backup: hand-edits are lo
     uv run --no-project scripts/setup_env.py --local       # .env (host runs)
     uv run --no-project scripts/setup_env.py --local --force
 
-Usually invoked through `make setup-env` / `make setup-env-local` (+ `-force`).
+Usually invoked through `make env:setup` / `make env:local` (or `env:force` / `env:local-force`).
 """
 
 from __future__ import annotations

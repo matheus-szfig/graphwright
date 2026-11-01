@@ -23,9 +23,7 @@
     "[role=radio]", "[role=tab]", "[role=menuitem]", "[role=option]", "[role=switch]",
     "[onclick]", '[tabindex]:not([tabindex="-1"])', '[contenteditable=""]', '[contenteditable="true"]',
   ].join(",");
-  // Images are targetable evidence even without a click handler.
-  const OBSERVABLE_SEL = INTERACTIVE_SEL + ",img,canvas,[role=img]";
-  const HEADING_SEL = "h1,h2,h3,h4,[role=heading]";
+  const HEADING_SEL = "h1,h2,h3,h4,h5,h6,[role=heading]";
   // ARIA live regions plus the class names server-rendered apps commonly use for
   // messages (Bootstrap, JSF/PrimeFaces/RichFaces, ASP.NET validation, i18n variants).
   const ALERT_SEL = [
@@ -45,7 +43,49 @@
 
   const norm = (s) => (s == null ? "" : String(s).replace(/\s+/g, " ").trim());
   const clip = (s, n) => (s.length <= n ? s : s.slice(0, n - 1) + "…");
-  const textOf = (el, n = 80) => clip(norm(el.textContent), n);
+  function textOf(el, n = 80) {
+    // Containers are now observable too; don't turn nested scripts/styles into
+    // labels. Stop once the display budget is full instead of copying a whole tree.
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (node.nodeType === 1) return node.matches("script,style,template,noscript") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let text = "", node;
+    while ((node = walker.nextNode())) {
+      text += node.nodeValue;
+      if (norm(text).length > n) break;
+    }
+    return clip(norm(text), n);
+  }
+
+  // Traverse open shadow roots too. Closed roots and unrendered virtual rows are
+  // not DOM available to an isolated-world observer.
+  function allElements(root = document) {
+    const out = [];
+    for (const el of root.querySelectorAll("*")) {
+      out.push(el);
+      if (el.shadowRoot) out.push(...allElements(el.shadowRoot));
+    }
+    return out;
+  }
+
+  function categoryOf(el) {
+    if (el.matches("a[href],[role=link]")) return "links";
+    if (el.matches(INTERACTIVE_SEL) || el.matches(
+      "[role=slider],[role=spinbutton],[role=treeitem],[role=menuitemcheckbox],[role=menuitemradio],[contenteditable=plaintext-only]"
+    )) return "controls";
+    if (el.matches("img,canvas,svg,video,audio,object,embed,[role=img]")) return "media";
+    if (el.matches(ALERT_SEL + ",progress,meter,output,[role=progressbar],[role=meter],[role=log],[role=timer]")) return "status";
+    if (el.matches("table,thead,tbody,tfoot,tr,td,th,[role=table],[role=grid],[role=treegrid],[role=row],[role=cell],[role=gridcell],[role=columnheader],[role=rowheader]")) return "tables";
+    if (el.matches(LANDMARK_SEL + ",details,iframe,frame,ul,ol,li,dl,dt,dd,[role=list],[role=listitem],[role=region],[role=group],[role=tree],[role=listbox],[role=menu],[role=tablist]")) return "structure";
+    if (el.matches(HEADING_SEL + ",label,legend,p,pre,blockquote,time,code") ||
+        Array.from(el.childNodes).some(n => n.nodeType === 3 && norm(n.nodeValue))) return "text";
+    // Unlabelled containers can still be useful for screenshots, drop zones,
+    // scrolling and delegated event handlers. Keep them behind the Other filter.
+    return "other";
+  }
 
   function idFor(el) {
     let id = registry.get(el);
@@ -55,6 +95,33 @@
       byId.set(id, new WeakRef(el));
     }
     return id;
+  }
+
+  function cssPath(el) {
+    const parts = [];
+    let node = el;
+    while (node) {
+      if (node.id) { parts.unshift("#" + CSS.escape(node.id)); break; }
+      const tag = node.localName;
+      const siblings = node.parentNode?.children ? Array.from(node.parentNode.children).filter(n => n.localName === tag) : [];
+      parts.unshift(tag + (siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(node) + 1})` : ""));
+      node = node.parentElement;
+    }
+    const root = el.getRootNode();
+    return (root.host ? cssPath(root.host) + " >>> " : "") + parts.join(" > ");
+  }
+
+  function deepQuery(selector, root = document) {
+    const boundary = selector.indexOf(" >>> ");
+    if (boundary !== -1) {
+      const hosts = root.querySelectorAll(selector.slice(0, boundary));
+      return Array.from(hosts).flatMap(host => host.shadowRoot ? deepQuery(selector.slice(boundary + 5), host.shadowRoot) : []);
+    }
+    const matches = Array.from(root.querySelectorAll(selector));
+    for (const host of root.querySelectorAll("*")) {
+      if (host.shadowRoot) matches.push(...deepQuery(selector, host.shadowRoot));
+    }
+    return matches;
   }
 
   function roleOf(el) {
@@ -70,9 +137,19 @@
       case "table": return "table";
       case "img": return "img";
       case "canvas": return "img";
+      case "svg": return "img";
+      case "progress": return "progressbar";
+      case "meter": return "meter";
+      case "output": return "status";
+      case "dialog": return "dialog";
+      case "tr": return "row";
+      case "th": return "columnheader";
+      case "td": return "cell";
+      case "li": return "listitem";
+      case "ul": case "ol": return "list";
       case "input": {
         const ty = (el.getAttribute("type") || "text").toLowerCase();
-        if (ty === "hidden") return null;
+        if (ty === "hidden") return "hiddeninput";
         if (ty === "button" || ty === "submit" || ty === "reset" || ty === "image") return "button";
         if (ty === "checkbox") return "checkbox";
         if (ty === "radio") return "radio";
@@ -107,7 +184,7 @@
     const lb = el.getAttribute("aria-labelledby");
     if (lb) {
       const s = norm(lb.split(/\s+/).map((id) => {
-        const n = el.ownerDocument.getElementById(id);
+        const n = el.getRootNode().getElementById(id);
         return n ? n.textContent : "";
       }).join(" "));
       if (s) return clip(s, 80);
@@ -115,7 +192,7 @@
     const t = el.tagName.toLowerCase();
     if (t === "input" || t === "select" || t === "textarea") {
       if (el.id) {
-        const lab = el.ownerDocument.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        const lab = el.getRootNode().querySelector(`label[for="${CSS.escape(el.id)}"]`);
         if (lab) { const s = labelText(lab); if (s) return s; }
       }
       // A wrapping <label> names the control only if it wraps just this one control;
@@ -201,7 +278,7 @@
     let node = el.previousSibling, hops = 0;
     while (node && hops < 4 && out.length < 2) {
       if (node.nodeType === 3) push(node.nodeValue);
-      else if (node.nodeType === 1 && !node.matches(INTERACTIVE_SEL)) push(node.textContent);
+      else if (node.nodeType === 1 && !node.matches(INTERACTIVE_SEL + ",script,style,template,noscript")) push(textOf(node, 60));
       node = node.previousSibling; hops++;
     }
     if (!out.length && el.parentElement) {
@@ -227,7 +304,11 @@
 
   function states(el, role) {
     const s = [];
-    if (el.disabled || el.getAttribute("aria-disabled") === "true") s.push("disabled");
+    if (el.matches(":disabled") || el.getAttribute("aria-disabled") === "true") s.push("disabled");
+    if (el.closest('[aria-hidden="true"]')) s.push("aria-hidden");
+    if (el.closest("[inert]")) s.push("inert");
+    if (el.getAttribute("aria-busy") === "true") s.push("busy");
+    if (el.getAttribute("aria-invalid") === "true") s.push("invalid");
     if ((role === "checkbox" || role === "radio") && (el.checked || el.getAttribute("aria-checked") === "true")) s.push("checked");
     if (el.required || el.getAttribute("aria-required") === "true") s.push("required");
     if (el.readOnly) s.push("readonly");
@@ -285,50 +366,61 @@
 
   function extract(opts, prefix) {
     const t0 = performance.now();
-    opts = Object.assign({ maxElements: 400, includeHidden: false }, opts || {});
+    opts = Object.assign({ maxElements: 2000 }, opts || {});
     if (typeof prefix === "string") framePrefix = prefix;
 
-    const candidates = document.querySelectorAll(OBSERVABLE_SEL);
+    const all = allElements();
+    const candidates = all.filter(el => !el.matches("html,body,script,style,meta,link,head,title,template,noscript") &&
+      !el.closest("script,style,template,noscript") &&
+      (!el.ownerSVGElement || el.hasAttribute("role") || el.hasAttribute("tabindex")) && categoryOf(el));
+    // Controls cannot be starved by a large text/table section. Hidden inventory
+    // has its own budget and never enters runtime visible-target matching.
+    const categories = new Map(candidates.map(el => [el, categoryOf(el)]));
+    candidates.sort((a, b) => Number(!["controls", "links", "media"].includes(categories.get(a))) -
+      Number(!["controls", "links", "media"].includes(categories.get(b))));
     const elements = [];
+    const hiddenElements = [];
     let hidden = 0;
+    let truncated = 0;
     for (const el of candidates) {
       const role = roleOf(el);
-      if (role === "img" && el.closest('[aria-hidden="true"]')) { hidden++; continue; }
-      if (!role) { hidden++; continue; }
       const vis = visible(el);
-      if (!vis) { hidden++; if (!opts.includeHidden) continue; }
+      if (!vis) hidden++;
+      const destination = vis ? elements : hiddenElements;
+      if (destination.length >= opts.maxElements) { truncated++; continue; }
       const r = el.getBoundingClientRect();
       const name = accName(el);
       const rec = {
         id: idFor(el), role, tag: el.tagName.toLowerCase(), name,
+        category: categories.get(el), visible: vis,
+        css_path: cssPath(el),
         dom_id: el.id || null, // the HTML id attribute — stable on legacy portals, usable in recognize
-        value: valueOf(el, role),
+        value: vis ? valueOf(el, role) : null,
         href: role === "link" ? clip(norm(el.getAttribute("href")), 120) || null : null,
         options: optionsOf(el),
-        states: states(el, role),
+        states: [...states(el, role), ...(!vis ? ["hidden"] : [])],
         landmark: landmarkOf(el),
         nearby: nearby(el, name),
         bbox: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-        in_viewport: inViewport(r),
+        in_viewport: vis && inViewport(r),
       };
-      elements.push(rec);
-      if (elements.length >= opts.maxElements) break;
+      destination.push(rec);
     }
 
-    const headings = Array.from(document.querySelectorAll(HEADING_SEL)).filter(visible).slice(0, 20).map((h) => ({
+    const headings = all.filter(el => el.matches(HEADING_SEL) && visible(el)).slice(0, 20).map((h) => ({
       level: Number(h.getAttribute("aria-level")) || Number((h.tagName.match(/\d/) || [2])[0]),
       text: textOf(h, 100),
     })).filter((h) => h.text);
 
     const alerts = [];
-    for (const a of document.querySelectorAll(ALERT_SEL)) {
+    for (const a of all.filter(el => el.matches(ALERT_SEL))) {
       if (!visible(a)) continue;
       const s = clip(norm(a.innerText), 240);
       if (s && !alerts.includes(s)) alerts.push(s);
       if (alerts.length >= 10) break;
     }
 
-    const tables = Array.from(document.querySelectorAll("table")).filter((t) => visible(t) && isDataTable(t)).slice(0, 20).map(tableShape);
+    const tables = all.filter(t => t.matches("table") && visible(t) && isDataTable(t)).slice(0, 20).map(tableShape);
 
     return {
       url: location.href,
@@ -336,16 +428,37 @@
       lang: document.documentElement.lang || null,
       ready: document.readyState,
       viewport: { w: innerWidth, h: innerHeight, scroll_y: Math.round(scrollY) },
-      elements, headings, alerts, tables,
-      stats: { candidates: candidates.length, hidden, kept: elements.length, extract_ms: Math.round((performance.now() - t0) * 10) / 10 },
+      elements, hidden_elements: hiddenElements, headings, alerts, tables,
+      stats: { candidates: candidates.length, hidden, kept: elements.length, truncated, extract_ms: Math.round((performance.now() - t0) * 10) / 10 },
     };
   }
 
   function signature() {
     const main = document.querySelector("main,[role=main]") || document.body;
-    const txt = main ? main.textContent.slice(0, 20000) : "";
-    const n = document.querySelectorAll(INTERACTIVE_SEL).length;
+    let txt = main ? main.textContent.slice(0, 20000) : "";
+    const all = allElements();
+    for (const el of all) {
+      if (el.shadowRoot) txt += "|" + el.shadowRoot.textContent.slice(0, 20000);
+    }
+    const n = all.filter(el => el.matches(INTERACTIVE_SEL)).length;
     return fnv1a(location.href + "|" + document.title + "|" + n + "|" + txt);
+  }
+
+  function composedContains(ancestor, node) {
+    for (let current = node; current; current = current.parentNode || current.host) {
+      if (current === ancestor) return true;
+    }
+    return false;
+  }
+
+  function topAt(x, y) {
+    let top = document.elementFromPoint(x, y);
+    while (top?.shadowRoot) {
+      const inner = top.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === top) break;
+      top = inner;
+    }
+    return top;
   }
 
   function box(id) {
@@ -359,15 +472,15 @@
     if (vis && inView) {
       const cx = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1);
       const cy = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
-      const top = document.elementFromPoint(cx, cy);
+      const top = topAt(cx, cy);
       // An ancestor hit (e.g. body behind an overflow-clipped menu item) does
       // not receive a click on behalf of this element. Only the element or a
       // descendant can deliver the event to it.
-      occluded = !top || !(top === el || el.contains(top));
+      occluded = !top || !composedContains(el, top);
     }
     return {
       id, visible: vis, in_viewport: inView, occluded,
-      disabled: !!(el.disabled || el.getAttribute("aria-disabled") === "true"),
+      disabled: !!(el.matches(":disabled") || el.getAttribute("aria-disabled") === "true"),
       bbox: { x: r.left, y: r.top, w: r.width, h: r.height },
     };
   }
@@ -390,9 +503,8 @@
     const r = el.getBoundingClientRect();
     if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) return "element is clipped by its frame viewport";
     for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.1, 0.5, 0.9]) {
-      const stack = document.elementsFromPoint(r.left + r.width * fx, r.top + r.height * fy);
-      const top = stack[0];
-      if (top && !(top === el || el.contains(top) || top.contains(el))) return "element is covered by another element";
+      const top = topAt(r.left + r.width * fx, r.top + r.height * fy);
+      if (top && !(composedContains(el, top) || composedContains(top, el))) return "element is covered by another element";
     }
     return null;
   }
@@ -407,7 +519,7 @@
       const r = document.evaluate(expr, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
       nodes = []; for (let i = 0; i < r.snapshotLength; i++) nodes.push(r.snapshotItem(i));
     } else {
-      nodes = document.querySelectorAll(selector);
+      nodes = deepQuery(selector);
     }
     for (const el of nodes) {
       if (!(el instanceof Element) || !visible(el)) continue;

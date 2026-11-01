@@ -75,6 +75,51 @@ body { font-family: var(--font-sans); font-size: 13px; line-height: 18px; -webki
   border-radius: 0.5rem;
 }
 
+/* Event summaries reserve room for the copy icon at every rail width. */
+.event-card > details { min-width: 0; overflow: hidden; }
+.event-card > details > summary {
+  min-height: 24px;
+  padding-right: 28px;
+  line-height: 24px;
+  list-style-position: inside;
+  overflow-wrap: anywhere;
+}
+.event-card > details:not([open]) > summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.event-card > details pre { overflow-x: auto; }
+
+/* AI chat follows docs/design/ai_chat without changing the canvas palette. */
+.ai-chat-column { width: 100%; min-width: 0; }
+.ai-markdown { overflow-wrap: anywhere; }
+.ai-markdown > :first-child { margin-top: 0; }
+.ai-markdown > :last-child { margin-bottom: 0; }
+.ai-markdown p, .ai-markdown ul, .ai-markdown ol, .ai-markdown blockquote,
+.ai-markdown table, .ai-markdown pre { margin-block: 0.65rem; }
+.ai-markdown h1, .ai-markdown h2, .ai-markdown h3, .ai-markdown h4,
+.ai-markdown h5, .ai-markdown h6 { color: var(--color-on-surface); font-weight: 600; margin-block: 1rem 0.5rem; line-height: 1.4; }
+.ai-markdown h1 { font-size: 1.25rem; }
+.ai-markdown h2 { font-size: 1.1rem; }
+.ai-markdown h3 { font-size: 0.95rem; }
+.ai-markdown ul { list-style: disc; padding-left: 1.4rem; }
+.ai-markdown ol { list-style: decimal; padding-left: 1.4rem; }
+.ai-markdown li { margin-block: 0.25rem; }
+.ai-markdown li > p { margin-block: 0.25rem; }
+.ai-markdown strong { color: var(--color-on-surface); font-weight: 600; }
+.ai-markdown a { color: var(--color-secondary-soft); text-decoration: underline; text-underline-offset: 3px; }
+.ai-markdown :not(pre) > code { font-family: var(--font-mono); font-size: 0.9em; color: var(--color-secondary-soft); background: var(--color-surface-container); padding: 0.1rem 0.3rem; border-radius: 4px; }
+.ai-markdown blockquote { border-left: 2px solid var(--color-primary-soft); padding-left: 0.8rem; color: var(--color-muted); }
+.ai-markdown table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ai-markdown th, .ai-markdown td { padding: 0.45rem 0.65rem; border: 1px solid var(--color-outline-strong); text-align: left; }
+.ai-markdown th { background: var(--color-surface-high); color: var(--color-on-surface); font-weight: 600; }
+.ai-markdown tr:nth-child(even) { background: var(--color-surface-container); }
+.ai-markdown .contains-task-list { list-style: none; padding-left: 0.2rem; }
+.ai-markdown .task-list-item input { margin-right: 0.45rem; accent-color: var(--color-primary-soft); }
+.ai-markdown hr { border-color: var(--color-outline-strong); margin-block: 1rem; }
+.ai-markdown > div:has(> pre) { margin-block: 0.75rem; }
+
 /* Scrollbars */
 * { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
 

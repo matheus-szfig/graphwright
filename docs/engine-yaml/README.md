@@ -14,6 +14,7 @@ repository's installed engine and builder schema when checking compatibility.
 | Your goal | Read |
 |---|---|
 | Build your first workflow | [Tutorial](tutorial.md) |
+| Author graphs with OpenAI or Claude, idle or mid-run | [Builder AI assistant](ai-assistant.md) |
 | Look up a field, action, condition, or default | [Language reference](reference.md) |
 | Call an API, retrieve a 2FA code, poll email, or use several authenticators | [Requests and 2FA](requests-and-2fa.md) |
 | Extract data, transform values, or run JavaScript | [Code and extraction](code-and-extraction.md) |
@@ -43,8 +44,10 @@ reference open while editing. The request chapter addresses the common requireme
 flowchart LR
     A[Observe page] --> B{Current node recognizes it?}
     B -->|yes| C[Run actions in order]
-    B -->|no| R[Find a recognizable node]
-    R --> A
+    B -->|no| R{Global resync enabled?}
+    R -->|no| S[Stop or follow on_fail]
+    R -->|yes| T[Find first recognizable node or fail]
+    T --> A
     C --> D[Observe and choose first matching transition]
     D --> E[Check postconditions]
     E --> F[Move to next node]

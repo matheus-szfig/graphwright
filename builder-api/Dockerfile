@@ -2,7 +2,7 @@
 # editable path dependency):
 #   docker build -f builder-api/Dockerfile -t graphwright-builder-api .
 # Runs headless inside Docker; for a headed browser run it on the host instead
-# (`make builder-api`) and point nginx at host.docker.internal:8765.
+# (`make builder:api`) and point nginx at host.docker.internal:8765.
 FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -37,6 +37,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
 
 COPY builder-api/src ./src
+# The AI assistant reads the language manual through its local tools (D-43).
+COPY docs/engine-yaml /app/docs/engine-yaml
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev
 

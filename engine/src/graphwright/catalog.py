@@ -98,8 +98,10 @@ def load_graph(name: str, directory: Path | None = None) -> CompiledGraph:
         return compile_workflow(Workflow.from_yaml(path))
     except GraphError as exc:
         raise GraphInvalid(name, exc.errors) from exc
-    except (ValidationError, yaml.YAMLError) as exc:
-        raise GraphInvalid(name, [str(exc)]) from exc
+    except (ValidationError, yaml.YAMLError):
+        # The builder saves invalid drafts; their text may hold submitted values, so it
+        # never reaches worker logs or API errors. Repair them in the builder.
+        raise GraphInvalid(name, ["graph YAML or schema is invalid; repair it in the builder"]) from None
 
 
 def validate_inputs(wf: Workflow, provided: dict[str, Any], *, has_credential: bool) -> list[str]:

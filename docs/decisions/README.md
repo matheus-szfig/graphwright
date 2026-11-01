@@ -31,7 +31,7 @@ graphwright was extracted from (D-24).
 | 2026-10-25 | D-17 | [The builder editor must survive hot reload](2026-10-25-D-17-the-builder-editor-must-survive-hot-reload.md) | implemented | `builder` |
 | 2026-10-25 | D-18 | [Builder layout: left rail, floating player HUD, right-rail inspector](2026-10-25-D-18-builder-layout-left-rail-floating-player-hud-right-rail-insp.md) | implemented | `builder` |
 | 2026-10-25 | D-19 | [Builder visual language: the Synthetic Flow design export](2026-10-25-D-19-builder-visual-language-the-synthetic-flow-design-export.md) | implemented | `builder` `design` |
-| 2026-10-25 | D-20 | [`make builder-local` is the one command](2026-10-25-D-20-make-builder-local-is-the-one-command.md) | implemented | `builder` `devops` |
+| 2026-10-25 | D-20 | [`make builder:local` is the one command](2026-10-25-D-20-make-builder-local-is-the-one-command.md) | implemented | `builder` `devops` |
 | 2026-10-25 | D-21 | [Root `.dockerignore`](2026-10-25-D-21-root-dockerignore.md) | implemented | `devops` `docker` |
 | 2026-10-25 | D-22 | [Make targets are thin shells over stdlib Python scripts](2026-10-25-D-22-make-targets-are-thin-shells-over-stdlib-python-scripts.md) | implemented | `devops` `tooling` `standard` |
 | 2026-10-25 | D-23 | [Secrets in the worker are objects, not strings; authenticated runs share no cookie jar](2026-10-25-D-23-secrets-in-the-worker-are-objects-not-strings-authenticated.md) | implemented | `security` `engine` |
@@ -48,10 +48,15 @@ graphwright was extracted from (D-24).
 | 2026-10-25 | D-34 | [Failure evidence is captured from the live page, masked, and stored as artifacts](2026-10-25-D-34-failure-evidence-is-captured-from-the-live-page-masked-and-sto.md) | implemented | `engine` `api` `debugging` `security` |
 | 2026-10-25 | D-35 | [RustFS replaces MinIO as the stack's object store](2026-10-25-D-35-rustfs-replaces-minio-as-the-stack-s-object-store.md) | implemented | `devops` `storage` |
 | 2026-10-25 | D-36 | [Code nodes are sandboxed JavaScript; `evaluate` runs JavaScript in the page](2026-10-25-D-36-code-nodes-are-sandboxed-javascript-evaluate-runs-js-in-the-pa.md) | implemented | `engine` `security` `code` |
-
 | 2026-10-29 | D-37 | [Caller-owned integration and portable action readiness](2026-10-29-D-37-engine-boundary-and-action-readiness.md) | implemented | `engine` `architecture` `observer` |
-
 | 2026-10-29 | D-38 | [Atomic builder deletion and live session state](2026-10-29-D-38-builder-deletion-and-live-state.md) | implemented | `builder` `authoring` |
+| 2026-11-01 | D-39 | [Shared graph JavaScript sources](2026-11-01-D-39-shared-graph-scripts.md) | implemented | `engine` `builder` `code` |
+| 2026-11-01 | D-40 | [Global graph resynchronization is opt-in](2026-11-01-D-40-global-resync-is-opt-in.md) | implemented | `engine` `authoring` |
+| 2026-11-01 | D-41 | [Broad page inventory with graph-saved view filters](2026-11-01-D-41-page-inventory-and-view-filters.md) | implemented | `observer` `engine` `builder` |
+| 2026-11-01 | D-42 | [Save invalid drafts, validate at execution; drafts outlive panels](2026-11-01-D-42-save-invalid-drafts-validate-at-execution.md) | implemented | `builder` `authoring` `ux` |
+| 2026-11-01 | D-43 | [Builder AI assistant with private context and reviewed execution](2026-11-01-D-43-builder-ai-assistant.md) | implemented | `builder` `ai` `security` |
+| 2026-11-01 | D-44 | [AI harness: explorable context, streaming, budgets, interrupt and steer](2026-11-01-D-44-ai-harness-context-and-control.md) | implemented | `builder` `ai` `privacy` |
+| 2026-11-01 | D-45 | [Make targets are named `silo:action`](2026-11-01-D-45-make-targets-are-silo-action.md) | implemented | `devops` `tooling` `standard` |
 
 ## Open / deferred
 
@@ -62,4 +67,4 @@ graphwright was extracted from (D-24).
 - Subgraphs/macros (`call` nodes and actions are parsed and linted, not executed).
 - Per-credential encrypted session jars (D-23); run webhooks/callbacks; multi-tenant API
   keys (runs are visible to every key today); evidence retention/pruning (D-34).
-- The observer does not pierce shadow roots yet.
+- The observer cannot read closed shadow roots or unrendered virtual rows (D-41).

@@ -1,9 +1,10 @@
 """PageState — the observation contract.
 
-One PageState per observation. It is deliberately small: interactive elements, the
-page's signposts (alerts, headings), table *shapes* (not contents), frames and a route
-template. Everything that consumes a page (graph predicates, decision models, LLM
-repair, goldens) reads this model, never raw HTML.
+One PageState per observation: categorized visible elements, separate hidden
+inventory, signposts (alerts, headings), table shapes, frames and a route template.
+Everything that consumes a page (graph predicates, decision models, LLM repair,
+goldens) reads this bounded model, never raw HTML. Hidden inventory is inspection
+only and does not participate in visible target matching.
 
 Element ids (`e12`, `f1e3`) are assigned inside the isolated world and are stable for
 the lifetime of the frame, so two observations of an unchanged page produce the same
@@ -91,6 +92,9 @@ class Element(BaseModel):
     nearby: list[str] = Field(default_factory=list)
     bbox: BBox
     in_viewport: bool = True
+    visible: bool = True
+    category: str = "other"
+    css_path: str | None = None  # observer-generated fallback; >>> crosses an open shadow root
 
     def label(self) -> str:
         """Best human label: accessible name, else nearest text, else the tag."""
@@ -121,6 +125,7 @@ class FrameInfo(BaseModel):
 class Stats(BaseModel):
     candidates: int = 0
     hidden: int = 0
+    truncated: int = 0
     kept: int = 0
     frames: int = 1
     extract_ms: float = 0.0
@@ -140,6 +145,8 @@ class PageState(BaseModel):
     alerts: list[str] = Field(default_factory=list)
     headings: list[Heading] = Field(default_factory=list)
     elements: list[Element] = Field(default_factory=list)
+    # Inspection only: these must never satisfy visible predicates or resolution.
+    hidden_elements: list[Element] = Field(default_factory=list)
     tables: list[TableShape] = Field(default_factory=list)
     stats: Stats = Field(default_factory=Stats)
     observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -165,8 +172,9 @@ class PageState(BaseModel):
         alerts: list[str] = []
         headings: list[Heading] = []
         elements: list[Element] = []
+        hidden_elements: list[Element] = []
         tables: list[TableShape] = []
-        candidates = hidden = 0
+        candidates = hidden = truncated = 0
         extract_ms = 0.0
 
         for index, parent, raw in frames:
@@ -175,10 +183,12 @@ class PageState(BaseModel):
             alerts.extend(a for a in raw.get("alerts", []) if a not in alerts)
             headings.extend(Heading(frame=index, **h) for h in raw.get("headings", []))
             elements.extend(Element(frame=index, **e) for e in raw.get("elements", []))
+            hidden_elements.extend(Element(frame=index, **e) for e in raw.get("hidden_elements", []))
             tables.extend(TableShape(frame=index, **t) for t in raw.get("tables", []))
             stats = raw.get("stats", {})
             candidates += stats.get("candidates", 0)
             hidden += stats.get("hidden", 0)
+            truncated += stats.get("truncated", 0)
             extract_ms += stats.get("extract_ms", 0.0)
 
         # Reading order: on-screen first, then top-to-bottom, left-to-right.
@@ -195,10 +205,12 @@ class PageState(BaseModel):
             alerts=alerts,
             headings=headings,
             elements=elements,
+            hidden_elements=hidden_elements,
             tables=tables,
             stats=Stats(
                 candidates=candidates,
                 hidden=hidden,
+                truncated=truncated,
                 kept=len(elements),
                 frames=len(frames),
                 extract_ms=round(extract_ms, 1),
@@ -212,7 +224,10 @@ class PageState(BaseModel):
         return next((e for e in self.elements if e.id == element_id), None)
 
     def interactive(self) -> list[Element]:
-        return [e for e in self.elements if e.role not in ("heading", "img", "generic")]
+        return [e for e in self.elements if e.category in ("controls", "links") or e.role in (
+            "button", "link", "textbox", "combobox", "checkbox", "radio", "tab", "menuitem",
+            "option", "switch", "slider", "spinbutton", "treeitem", "fileinput", "clickable",
+        )]
 
     # -- rendering --
 

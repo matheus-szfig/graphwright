@@ -1,7 +1,10 @@
 # Root build context — used by images that need more than one app (api/ and
 # builder-api/ depend on engine/). Keeps the context small.
 .git
-docs
+docs/*
+# …except the language manual the builder's AI assistant reads (builder-api image).
+!docs/engine-yaml/
+!docs/engine-yaml/**
 **/.venv
 **/node_modules
 **/dist

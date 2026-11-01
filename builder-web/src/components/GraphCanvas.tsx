@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -114,14 +114,28 @@ export function GraphCanvas(p: GraphCanvasProps) {
   )
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges)
+  const geometry = JSON.stringify(layout.nodes.map(n => [n.id, n.position]))
+  const previousGeometry = useRef(geometry)
 
   useEffect(() => {
+    const relayout = previousGeometry.current !== geometry
+    previousGeometry.current = geometry
     setNodes((prev) => {
-      const pos = new Map(prev.map((n) => [n.id, n.position]))
-      return layout.nodes.map((n) => ({ ...n, position: pos.get(n.id) ?? n.position, selected: n.id === p.selected }))
+      const previous = new Map(prev.map((n) => [n.id, n]))
+      return layout.nodes.map((n) => {
+        const existing = previous.get(n.id)
+        // Keep React Flow's measurements and interaction state across status updates.
+        // Dropping measured dimensions hides the node and its edges until remeasurement.
+        return {
+          ...existing,
+          ...n,
+          position: relayout ? n.position : existing?.position ?? n.position,
+          selected: n.id === p.selected,
+        }
+      })
     })
     setEdges(layout.edges)
-  }, [layout, p.selected, setNodes, setEdges])
+  }, [layout, geometry, p.selected, setNodes, setEdges])
 
   const onConnect = useCallback(
     (c: Connection) => {

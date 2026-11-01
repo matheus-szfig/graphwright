@@ -31,19 +31,78 @@ rejected by the schema models; arbitrary extra configuration is not forwarded to
 | `version` | Integer, `1` | Revision metadata; no version-based execution dispatch. |
 | `portal` | Required string | Site identifier, also used by credential integration. |
 | `risk` | `open` or `protected`, `open` | Chooses the normal humanization budget. Does not grant access or solve challenges. |
+| `resync` | `disabled` or `global`, `disabled` | Recognition failure stops or follows `on_fail`. Opt into `global` to search every node in declaration order, including nodes without a connecting transition. |
 | `entry_url` | Optional string | Templated initial navigation before node execution. |
 | `inputs` | Map of input declarations, `{}` | Per-run data and credential field declarations. |
 | `requests` | Map of request declarations, `{}` | HTTP/TOTP/IMAP value sources. |
+| `scripts` | Map of JavaScript source strings, `{}` | Shared bodies referenced by `script.ref` or `evaluate.ref`. See [code/extraction](code-and-extraction.md). |
 | `outputs` | Map of strings, `{}` | Top-level var name to descriptive schema label. |
 | `start` | Required string | Initial node name. |
 | `nodes` | Required map | Node name to node definition. |
 | `targets` | Map, `{}` | Target name to reusable locator definition. |
+| `page_filter` | Map, essentials visible | Saved builder Page-tab filters; does not filter recognition or target resolution. See below. |
+| `observation.max_elements` | Integer, `2000`, range `1..20000` | Collection budget per frame, separately for visible and hidden elements. Patch a running session after changing it. |
 | `imports` | List of strings, `[]` | Reserved metadata; no import/subgraph loader is implemented. |
 
 At least one `terminal: success` must be statically reachable from `start`, even if
 most real runs end in a business outcome. Every declared node must be reachable through
 transitions, `on_fail` routes, jumps, or declared `then` edges. Static reachability does
 not prove a transition condition can actually become true.
+
+## Page inventory and filters
+
+The Page tab starts with visible controls, links, media and status messages. **Show
+everything** reveals all collected categories, including hidden elements. Search,
+category buttons, frame, viewport, role, tag and state filters keep large pages
+manageable. Rows load in groups of 100; the count always reports the complete filtered
+result. **Save filters to graph** writes defaults to YAML. Unsaved filter changes stay
+in memory across tab switches; **Load graph defaults** discards them.
+
+Previously missing target rows now include:
+
+| Category | Elements and automation uses |
+|---|---|
+| Controls | ARIA sliders, spin buttons, tree items, menu check/radio items, editable regions; native controls, file inputs and disclosure summaries remain included. |
+| Text | All six heading levels, labels, legends, paragraphs, spans and other text containers; recognition and field extraction. |
+| Status | Alerts, live regions, progress, meters, output, logs and timers; completion/error/loading detection. |
+| Tables | Tables, rows, headers, cells and ARIA grids; target a particular result or extract data. |
+| Structure | Forms, dialogs, tabs/panels, navigation, sections, lists, fieldsets, details and frame containers; scoped targets and screenshots. |
+| Media | Images, canvases, SVG roots, video, audio, objects and embeds; screenshots and controls. Decorative `aria-hidden` images remain physically targetable and carry an `aria-hidden` state. |
+| Other | Plain containers, custom elements, IDs/test hooks, background-image containers, drop zones and elements with delegated event listeners; structural CSS fallback when no accessible name exists. |
+| Hidden inventory | CSS-hidden elements, collapsed contents and hidden inputs; inspect and author a target for when it becomes visible. Values are omitted. These rows never satisfy a visible predicate. |
+
+Elements in child frames and **open** shadow roots are observed. New targets retain
+their frame and use name, ID and nearby strategies before an observer-generated CSS
+path fallback. A CSS fallback may use `>>>` to cross an open shadow root; it requires
+the live observer and cannot prove an offline `recognize` predicate. Structural paths
+may need repair when the layout changes.
+
+```yaml
+page_filter:
+  categories: [controls, links, media, status] # [] means every category
+  roles: []                                  # exact role names, OR within each list
+  tags: []                                   # e.g. [input, textarea]
+  states: []                                 # e.g. [disabled, readonly]
+  query: ''                                  # literal case-insensitive substring
+  frame: null                                # null = every frame
+  visibility: visible                        # visible | hidden | all
+  viewport: all                              # all | inside | outside
+observation:
+  max_elements: 2000
+```
+
+Fields combine with AND; items in each list combine with OR. Empty lists allow any
+value. Query searches IDs, names, values, roles, tags, URLs, nearby text, landmarks,
+options and states. Filters affect both Page-tab table and text views, **not** the
+shared observation used by automation. The observer reports truncation rather than
+silently pretending the inventory is complete; raise `observation.max_elements`,
+Patch, then Re-detect if necessary. Controls, links and media have collection priority.
+
+Browser boundaries remain: closed shadow roots, virtualized/unloaded rows and
+content that has not been created cannot be enumerated. Canvas drawing primitives,
+PDF internals, CSS pseudo-elements and SVG paths without their own role/tabindex are
+not separate rows; target their rendered parent for image capture. Script/style and
+document metadata nodes are excluded.
 
 ## Inputs
 
@@ -53,7 +112,7 @@ inputs:
     type: string
     description: Reference supplied by the caller
   account_password:
-    type: password
+    type: secure
     credential: password
   locale:
     type: string
@@ -64,7 +123,7 @@ inputs:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `type` | `string` | Free descriptive label; password affects tooling/secret handling. No generic type coercion or validation follows from this label. |
+| `type` | `string` | Free descriptive label; `secure` (legacy alias: `password`) affects tooling/secret handling. No generic type coercion or validation follows from this label. |
 | `description` | Empty string | Author-facing explanation. |
 | `required` | `true` | Caller/credential integration must supply a value unless a default applies. |
 | `pii` | `true` | Marks personal/sensitive input use for masking; not encryption or a permission. |
@@ -288,8 +347,8 @@ transactions are created.
 | `fetch` | `request` | `into: null`, `on_error: fail` | Run request; copy fields to `vars[into or request]`; optionally continue on failure. |
 | `extract` | `into` | `schema`, `fields: {}`, `tables: {}` | Extract fields/tables into one variable; see extraction chapter. |
 | `capture_image` | `target`, `into` | `expected_sha256: null` | Capture rendered pixels as a secret PNG data URL plus dimensions, MIME type and hash; reject a changed hash when requested. See [images](images.md). |
-| `script` | `code` | `args: {}`, `into`, `timeout_ms: 1000`, `memory_mb: 64`, `allow_secrets: false` | Sandboxed synchronous JavaScript; no browser or I/O. |
-| `evaluate` | `script` | `args: {}`, `into`, `world: isolated`, `frame: 0`, `timeout_ms: 5000`, `allow_secrets: false` | Async JavaScript function body in a browser frame. |
+| `script` | Exactly one of `code` or `ref` | `args: {}`, `into`, `timeout_ms: 1000`, `memory_mb: 64`, `allow_secrets: false` | Sandboxed synchronous JavaScript; no browser or I/O. `ref` names a shared graph script. |
+| `evaluate` | Exactly one of `script` or `ref` | `args: {}`, `into`, `world: isolated`, `frame: 0`, `timeout_ms: 5000`, `allow_secrets: false` | Async JavaScript function body in a browser frame. `ref` names a shared graph script. |
 | `assert` | `condition` | `message: ""` | Check the current available observation and fail structurally if false. Does not wait. |
 | `jump` | `to` | — | Move immediately; skip remaining actions, transition selection, and postconditions. |
 | `call` | `macro` | `args: {}` | Reserved; raises a not-implemented structural error. |
@@ -316,7 +375,7 @@ when you need a newly observed condition.
 ```yaml
 actions:
   - click:
-      target: consultar_processos
+      target: search_records
       delay_s: 0.3
       timeout_s: 15
   - wait_for:

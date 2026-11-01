@@ -16,8 +16,8 @@ credentials through a provider; the runs API authenticates run-management calls 
 | Fictional test website | `demo-site/server.py` |
 | Documentation examples | `docs/engine-yaml/examples` (not automatically catalog entries) |
 
-From the repository root, run `make builder-local` for the headed builder at
-`http://localhost:5174/builder/`. In another terminal, `make demo-site` serves the
+From the repository root, run `make builder:local` for the headed builder at
+`http://localhost:5174/builder/`. In another terminal, `make demo:site` serves the
 fictional Acme Records site at `http://127.0.0.1:8090`. Use that host URL as `base_url`
 for local browser runs. Compose workers reach the demo at `http://demo-site:8090`.
 These are different network contexts; a container's localhost is not your host machine.

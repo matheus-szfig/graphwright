@@ -52,7 +52,7 @@ async def test_observe_reads_legacy_layout_frames_and_alerts(page) -> None:
     assert state.alerts == ["No information is available for the given parameters."]
     assert [h.text for h in state.headings if h.frame == 0] == ["Case lookup — first instance"]
 
-    by_name = {e.name: e for e in state.elements if e.name}
+    by_name = {e.name: e for e in state.interactive() if e.name}
     # <label for> wins for the checkbox; the submit's value is its name.
     assert by_name["Unified"].role == "checkbox" and "checked" in by_name["Unified"].states
     assert by_name["Search"].role == "button"
@@ -83,10 +83,10 @@ async def test_observe_reads_legacy_layout_frames_and_alerts(page) -> None:
     assert "Hidden" not in by_name
     assert state.stats.hidden >= 2
 
-    # Data table shape, not contents.
+    # Table shapes remain available; cells are now targetable too.
     table = next(t for t in state.tables if t.name == "Cases")
     assert table.headers == ["Number", "Class", "Subject"] and table.rows == 2
-    assert "CASE-2024-000123" not in state.render()
+    assert any(e.role == "cell" and "CASE-2024-000123" in e.name for e in state.elements)
 
     # Frame awareness: child frame elements are prefixed and carry their frame index.
     assert len(state.frames) == 2 and state.frames[1].parent == 0

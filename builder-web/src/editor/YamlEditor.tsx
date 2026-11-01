@@ -8,8 +8,10 @@ import { oneDark } from "@codemirror/theme-one-dark"
 import { EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view"
 
 import { yamlCompletionSource, type EditorContext } from "./completions"
+import { editorState, rememberEditor, restoreScroll } from "./memory"
 
 export interface YamlEditorProps {
+  memoryKey?: string
   value: string
   onChange: (value: string) => void
   context: EditorContext
@@ -19,7 +21,7 @@ export interface YamlEditorProps {
 /** CodeMirror YAML editor with Tab-to-accept completions. The completion source reads
  * the latest `context` through a ref, so page observations and graph changes flow in
  * without rebuilding the editor. */
-export function YamlEditor({ value, onChange, context, className }: YamlEditorProps) {
+export function YamlEditor({ value, onChange, context, className, memoryKey }: YamlEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const ctxRef = useRef(context)
@@ -37,7 +39,7 @@ export function YamlEditor({ value, onChange, context, className }: YamlEditorPr
 
   useEffect(() => {
     if (!host.current) return
-    const state = EditorState.create({
+    const state = editorState(memoryKey, {
       doc: value,
       extensions: [
         lineNumbers(),
@@ -75,7 +77,9 @@ export function YamlEditor({ value, onChange, context, className }: YamlEditorPr
     })
     const v = new EditorView({ state, parent: host.current })
     view.current = v
+    restoreScroll(memoryKey, v)
     return () => {
+      rememberEditor(memoryKey, v)
       v.destroy()
       view.current = null
     }

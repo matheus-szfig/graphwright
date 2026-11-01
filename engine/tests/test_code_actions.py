@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from conftest import browser_only
+from pydantic import ValidationError
 
 from graphwright.engine.compiler import lint
 from graphwright.engine.dsl import ActionContext, do_evaluate, do_script
@@ -90,6 +94,39 @@ async def test_script_into_a_var() -> None:
     assert events[-1]["kind"] == "script" and events[-1]["ok"] and events[-1]["set"] == ["parsed"]
 
 
+async def test_shared_scripts_resolve_for_sandbox_and_page_and_patch() -> None:
+    wf = workflow([{'script': {'ref': 'sum', 'args': {'n': 3}, 'into': 'sum'}}])
+    wf.scripts = {'sum': 'return args.n + vars.count;', 'extract': 'return document.title;'}
+    assert lint(wf) == []
+    observer = SimpleNamespace(evaluate=AsyncMock(return_value={'rows': [1, 2]}))
+    ctx, _ = ctx_for(wf, observer=observer)
+    await do_script(wf.nodes['a'].actions[0].script, ctx)
+    assert ctx.vars['sum'] == 5
+    await do_evaluate(Evaluate(ref='extract', args={'limit': 5}, into='page_data', timeout_ms=30000), ctx)
+    observer.evaluate.assert_awaited_once_with('return document.title;', {'limit': 5}, world='isolated', frame=0)
+    assert ctx.vars['page_data'] == {'rows': [1, 2]}
+    ctx.workflow = wf.model_copy(deep=True)
+    ctx.workflow.scripts['sum'] = 'return 9;'
+    await do_script(wf.nodes['a'].actions[0].script, ctx)
+    assert ctx.vars['sum'] == 9
+
+
+def test_shared_script_validation_lint_and_yaml_roundtrip() -> None:
+    with pytest.raises(ValidationError):
+        Evaluate(script='return 1;', ref='shared')
+    with pytest.raises(ValidationError):
+        Script()
+    wf = workflow([{'evaluate': {'ref': 'missing'}}])
+    assert any('Unknown shared script' in error for error in lint(wf))
+    wf.scripts['missing'] = 'const value = 1;\nreturn value;\n'
+    assert lint(wf) == []
+    text = wf.to_yaml()
+    assert 'missing: |' in text
+    assert Workflow.from_yaml_text(text).scripts == wf.scripts
+    wf.scripts['missing'] = 'return {'
+    assert any('does not compile' in error for error in lint(wf))
+
+
 async def test_script_without_into_sets_each_returned_key() -> None:
     ctx, _ = ctx_for(workflow([]))
     await do_script(Script(code="return {year: 2026, month: 10}"), ctx)
@@ -167,9 +204,11 @@ async def live():
 @browser_only
 async def test_evaluate_isolated_sees_the_dom_not_page_globals(live) -> None:
     page, observer = live
-    ctx, events = ctx_for(workflow([]), observer=observer)
-    await do_evaluate(Evaluate(script="document.querySelector('#h').textContent = args.text;"
-                                      "return {title: document.title, app: typeof window.appState}",
+    wf = workflow([])
+    wf.scripts['inspect_heading'] = ("document.querySelector('#h').textContent = args.text;"
+                                     "return {title: document.title, app: typeof window.appState}")
+    ctx, events = ctx_for(wf, observer=observer)
+    await do_evaluate(Evaluate(ref="inspect_heading",
                                args={"text": "{date}"}, into="probe"), ctx)
     assert ctx.vars["probe"] == {"title": "Shop", "app": "undefined"}  # page JS is invisible here
     assert await page.text_content("#h") == "25/10/2026"  # …but the DOM is shared

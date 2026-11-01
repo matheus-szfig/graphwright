@@ -55,12 +55,21 @@ export interface Workflow {
   workflow: string; version: number; portal: string; start: string; entry_url?: string; risk?: "open" | "protected"
   inputs: Record<string, InputSpec>
   requests?: Record<string, RequestSpec>
+  scripts?: Record<string, string>
   nodes: Record<string, WorkflowNode>
   targets: Record<string, { description: string; strategies: Record<string, unknown>[] }>
+  page_filter?: Partial<PageFilter>
+  observation?: { max_elements?: number }
+}
+export type ElementCategory = "controls" | "links" | "media" | "status" | "text" | "tables" | "structure" | "other"
+export interface PageFilter {
+  categories: ElementCategory[]; roles: string[]; tags: string[]; states: string[]; query: string
+  frame: number | null; visibility: "visible" | "hidden" | "all"; viewport: "all" | "inside" | "outside"
 }
 export interface GraphView { name: string; path: string; yaml: string; workflow: Workflow; edges: Edge[]; lint: string[] }
 
 export interface SessionSummary {
+  patch_pending?: boolean; patch_error?: string | null
   id: string; graph: string; inputs: Record<string, string>; status: string; node: string
   visits: Record<string, number>; events: number; failure: Failure | null; result: Record<string, unknown> | null
   vars: Record<string, unknown>; url: string | null; busy: boolean
@@ -72,15 +81,18 @@ export interface PageElement {
   id: string; frame: number; role: string; tag: string; dom_id: string | null; name: string; value: string | null; href: string | null
   options: string[]; states: string[]; landmark: string | null; nearby: string[]
   bbox: { x: number; y: number; w: number; h: number }; in_viewport: boolean
+  category?: ElementCategory; visible?: boolean; css_path?: string | null
 }
 export interface PageState {
   url: string; portal: string; route: string; title: string; page_type: string | null; signature: string | null
   frames: { index: number; url: string; route: string; parent: number | null }[]
   alerts: string[]; headings: { level: number; text: string; frame: number }[]
   elements: PageElement[]; tables: { id: string; name: string | null; headers: string[]; rows: number }[]
-  stats: { candidates: number; hidden: number; kept: number; frames: number; extract_ms: number; total_ms: number }
+  hidden_elements?: PageElement[]
+  stats: { candidates: number; hidden: number; kept: number; truncated?: number; frames: number; extract_ms: number; total_ms: number }
 }
 export interface TargetReport { ok: boolean; element: PageElement | null; attempts: string[]; description: string }
+export interface TargetEntry { yaml: string; description: string; references: string[]; report?: TargetReport }
 export interface Recognition { ok: boolean; reasons: string[] }
 
 /** One try of a graph request, as engine/requests.py traces it (secrets masked). */
@@ -101,10 +113,10 @@ export interface RequestReport {
 
 /** `script` action (code node) and `evaluate` action (JS in the page), as saved. */
 export interface ScriptSpec {
-  code: string; args?: Record<string, unknown>; into?: string | null; timeout_ms?: number; memory_mb?: number; allow_secrets?: boolean
+  code?: string | null; ref?: string | null; args?: Record<string, unknown>; into?: string | null; timeout_ms?: number; memory_mb?: number; allow_secrets?: boolean
 }
 export interface EvaluateSpec {
-  script: string; args?: Record<string, unknown>; into?: string | null; world?: "isolated" | "main"; frame?: number | string
+  script?: string | null; ref?: string | null; args?: Record<string, unknown>; into?: string | null; world?: "isolated" | "main"; frame?: number | string
   timeout_ms?: number; allow_secrets?: boolean
 }
 /** graphwright.testing.run_script — one sandbox run of a code-node body. */
@@ -128,6 +140,7 @@ export interface SchemaBundle {
 }
 export interface GraphCompletions {
   nodes: string[]; targets: string[]; inputs: string[]; shapers: string[]; macros: string[]
+  scripts?: string[]
   requests?: Record<string, string[]>
 }
 
@@ -135,6 +148,10 @@ export const api = {
   health: () => req<{ status: string; headed: boolean; graphs_dir: string }>("/health"),
   schema: () => req<SchemaBundle>("/schema"),
   graphs: {
+    putPageFilter: (name: string, value: PageFilter, expected: PageFilter) => req<GraphView>(`/graphs/${name}/page-filter`, { method: "PUT", body: JSON.stringify({ value, expected }) }),
+    targets: (name: string, sessionId?: string) => req<Record<string, TargetEntry>>(`/graphs/${name}/targets${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`),
+    putTarget: (name: string, target: string, yaml: string, expected_yaml: string) => req<GraphView>(`/graphs/${name}/targets/${encodeURIComponent(target)}`, { method: "PUT", body: JSON.stringify({ yaml, expected_yaml }) }),
+    deleteTarget: (name: string, target: string) => req<GraphView>(`/graphs/${name}/targets/${encodeURIComponent(target)}`, { method: "DELETE" }),
     list: () => req<GraphSummary[]>("/graphs"),
     completions: (name: string) => req<GraphCompletions>(`/graphs/${name}/completions`),
     lintNode: (name: string, node: string, yaml: string) => req<{ ok: boolean; errors: string[] }>(`/graphs/${name}/nodes/${node}/lint`, json({ yaml })),

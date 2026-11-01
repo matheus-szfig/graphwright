@@ -6,8 +6,8 @@ Dependencies are installed on first run (uv sync, npm ci, Playwright Chromium).
 
 Examples
 --------
-    make builder-local            # http://localhost:5174/builder/
-    make builder-local NGINX=1    # also re-point the stack's nginx at these two, so
+    make builder:local            # http://localhost:5174/builder/
+    make builder:local NGINX=1    # also re-point the stack's nginx at these two, so
                                   # http://localhost:8080/builder/ works while this runs
 
     uv run --no-project builder-api/scripts/dev_local.py [--nginx] [--api-port N] [--web-port N]

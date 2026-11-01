@@ -32,7 +32,7 @@ from graphwright.engine.schema import (
     Target,
     Workflow,
 )
-from graphwright.engine.secrets import MASK, Secret
+from graphwright.engine.secrets import MASK, Secret, is_private_input
 from graphwright.engine.targets import resolve
 from graphwright.observe.observer import ElementBox, Observer
 from graphwright.observe.pagestate import PageState
@@ -555,7 +555,7 @@ async def do_script(spec: Script, ctx: ActionContext) -> None:
         raise StructuralError("script: an arg is a secret (credential or sensitive request value); "
                               "set `allow_secrets: true` if the code really needs it")
     result = await asyncio.to_thread(
-        run_js, spec.code, args=_reveal(args), vars=_plain(ctx.vars), inputs=_plain(dict(ctx.inputs)),
+        run_js, ctx.workflow.script_source(spec), args=_reveal(args), vars=_plain(ctx.vars), inputs=_plain(dict(ctx.inputs)),
         timeout_ms=spec.timeout_ms, memory_mb=spec.memory_mb,
     )
     if not result.ok:
@@ -580,7 +580,7 @@ async def do_evaluate(spec: Evaluate, ctx: ActionContext) -> None:
     t0 = _time.perf_counter()
     try:
         value = await asyncio.wait_for(
-            ctx.observer.evaluate(spec.script, _reveal(args), world=spec.world, frame=spec.frame),
+            ctx.observer.evaluate(ctx.workflow.script_source(spec), _reveal(args), world=spec.world, frame=spec.frame),
             spec.timeout_ms / 1000,
         )
     except TimeoutError as exc:
@@ -678,6 +678,6 @@ def _is_pii(spec: Fill, ctx: ActionContext) -> bool:
                 return True
             continue
         inp = ctx.workflow.inputs.get(root)
-        if inp is not None and inp.pii:
+        if inp is not None and is_private_input(inp):
             return True
     return False

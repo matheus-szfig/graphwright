@@ -51,7 +51,7 @@ class Api:
             detail = exc.read().decode(errors="replace")
             raise SystemExit(f"{method} {path} → {exc.code}: {detail}") from None
         except urllib.error.URLError as exc:
-            raise SystemExit(f"cannot reach {self.base}: {exc.reason} — is the stack up? (make up)") from None
+            raise SystemExit(f"cannot reach {self.base}: {exc.reason} — is the stack up? (make stack:up)") from None
 
     def get(self, path: str) -> Any:
         return self._req("GET", path)
