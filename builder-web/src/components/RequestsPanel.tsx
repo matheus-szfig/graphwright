@@ -12,6 +12,7 @@ export interface RequestsPanelProps {
   view: GraphView
   session: SessionSummary | null
   values: Record<string, string>
+  /** Credential reference for `credential:` inputs and `kind: totp` requests without `secret`. */
   credential: string
   onError: (msg: string, errors?: string[]) => void
 }
@@ -200,7 +201,7 @@ function RequestTester(p: RequestsPanelProps & { name: string; spec: RequestSpec
         </button>
         {p.session && <Check checked={standalone} onChange={setStandalone} label="standalone" title="ignore the running session and use the inputs typed here" />}
         <Check checked={reveal} onChange={setReveal} label="reveal" title="show extracted secret values in this panel (local debugging only)" />
-        {inSession && <span className="text-faint">uses session {p.session!.id}'s inputs, vars and credential</span>}
+        {inSession && <span className="text-faint">uses the session's inputs, vars and credential</span>}
       </div>
 
       {report && <RequestReportView report={report} />}

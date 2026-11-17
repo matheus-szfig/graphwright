@@ -38,13 +38,59 @@ def test_list_and_get_graph(client: TestClient) -> None:
     assert "search_form:" in view["yaml"]
 
 
-def test_put_yaml_rejects_what_does_not_lint_and_writes_nothing(client: TestClient, tmp_path: Path) -> None:
+def test_shared_scripts_roundtrip_completions_and_sandbox_test(client: TestClient) -> None:
+    graph = '''workflow: shared
+portal: example
+scripts:
+  answer: |
+    return {value: args.n * 2};
+start: start
+nodes:
+  start:
+    recognize: {always: true}
+    actions:
+      - script: {ref: answer, args: {n: 21}, into: result}
+    transitions: [{to: done}]
+  done: {terminal: success}
+'''
+    response = client.put(f'/graphs/{GRAPH}', json={'yaml': graph})
+    assert response.status_code == 200
+    assert response.json()['lint'] == []
+    assert response.json()['workflow']['nodes']['start']['actions'][0]['script']['ref'] == 'answer'
+    assert client.get(f'/graphs/{GRAPH}/completions').json()['scripts'] == ['answer']
+    result = client.post(f'/graphs/{GRAPH}/scripts/test', json={'node': 'start', 'index': 0})
+    assert result.status_code == 200
+    assert result.json()['value'] == {'value': 42}
+    invalid = client.put(f'/graphs/{GRAPH}', json={'yaml': graph.replace('ref: answer', 'ref: missing')})
+    assert invalid.status_code == 200 and invalid.json()['lint']
+    rejected = client.post(f'/graphs/{GRAPH}/scripts/test', json={'node': 'start', 'index': 0})
+    assert rejected.status_code == 422
+    assert 'Unknown shared script' in rejected.json()['detail']
+
+
+def test_image_target_and_capture_schema(client: TestClient) -> None:
+    schema = client.get("/schema").json()
+    assert "capture_image" in schema["verbs"]
+    assert "CaptureImage" in schema["node"]["$defs"]
+    response = client.post(f"/graphs/{GRAPH}/targets/from-element", json={
+        "name": "captcha_image",
+        "element": {"id": "e3", "role": "img", "tag": "img",
+                    "name": "Verification image", "nearby": [], "frame": 0},
+    })
+    assert response.status_code == 201, response.text
+    view = response.json()["view"]
+    strategies = view["workflow"]["targets"]["captcha_image"]["strategies"]
+    assert strategies[0]["role"] == "img"
+    assert "Verification" in strategies[0]["name"]
+
+
+def test_put_yaml_saves_invalid_work_and_returns_diagnostics(client: TestClient, tmp_path: Path) -> None:
     before = (tmp_path / "graphs" / f"{GRAPH}.yaml").read_text(encoding="utf-8")
     bad = before.replace("to: done", "to: nowhere")
     r = client.put(f"/graphs/{GRAPH}", json={"yaml": bad})
-    assert r.status_code == 422
-    assert any("unknown node 'nowhere'" in e for e in r.json()["errors"])
-    assert (tmp_path / "graphs" / f"{GRAPH}.yaml").read_text(encoding="utf-8") == before
+    assert r.status_code == 200
+    assert any("unknown node 'nowhere'" in e for e in r.json()["lint"])
+    assert (tmp_path / "graphs" / f"{GRAPH}.yaml").read_text(encoding="utf-8") == bad
 
     r = client.post(f"/graphs/{GRAPH}/lint", json={"yaml": "workflow: [oops"})
     assert r.status_code == 200 and r.json()["ok"] is False and "invalid YAML" in r.json()["errors"][0]
@@ -62,7 +108,7 @@ def test_node_roundtrip_and_edit(client: TestClient) -> None:
     assert r.json()["workflow"]["nodes"]["record_detail"]["timeout_s"] == 42
 
     r = client.put(f"/graphs/{GRAPH}/nodes/record_detail", json={"yaml": "terminal: success\ntransitions: [{to: done}]"})
-    assert r.status_code == 422 and "terminal nodes carry no" in " ".join(r.json()["errors"])
+    assert r.status_code == 200 and "terminal nodes carry no" in " ".join(r.json()["lint"])
 
 
 def test_canvas_operations_add_node_edge_rename_delete(client: TestClient) -> None:
@@ -207,12 +253,12 @@ def test_inputs_can_be_added_and_removed(client: TestClient) -> None:
     assert client.put(f"/graphs/{GRAPH}/inputs/Bad Name", json={}).status_code == 400
     # a credential input cannot have a default (lint)
     r = client.put(f"/graphs/{GRAPH}/inputs/user", json={"credential": "username", "default": "x"})
-    assert r.status_code == 422
+    assert r.status_code == 200 and r.json()["lint"]
 
-    # removing an input that an action still references fails lint and writes nothing
+    # References can be repaired after saving a related edit.
     r = client.delete(f"/graphs/{GRAPH}/inputs/reference")
-    assert r.status_code == 422 and any("unknown input {reference}" in e for e in r.json()["errors"])
-    assert "reference" in client.get(f"/graphs/{GRAPH}").json()["workflow"]["inputs"]
+    assert r.status_code == 200 and any("unknown input {reference}" in e for e in r.json()["lint"])
+    assert "reference" not in client.get(f"/graphs/{GRAPH}").json()["workflow"]["inputs"]
 
     assert client.delete(f"/graphs/{GRAPH}/inputs/password").status_code == 200
 

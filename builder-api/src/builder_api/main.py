@@ -3,17 +3,19 @@ directly on :8765 by `builder-api` on the host when you want a headed browser.""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from graphwright import plugins
 from graphwright.engine import GraphError, Workflow
-from graphwright.engine.schema import dump_yaml
+from graphwright.engine.schema import PageFilter, dump_yaml
 from pydantic import BaseModel
 
 from builder_api import graphs as graphs_mod
@@ -52,6 +54,15 @@ class CreateGraph(BaseModel):
 
 class YamlBody(BaseModel):
     yaml: str
+
+
+class TargetBody(YamlBody):
+    expected_yaml: str | None = None
+
+
+class PageFilterBody(BaseModel):
+    value: PageFilter
+    expected: PageFilter
 
 
 class AddNode(BaseModel):
@@ -149,9 +160,10 @@ def _default_graphs_dir() -> Path:
 
 
 def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
-               request_transport: Any = None) -> FastAPI:
+               request_transport: Any = None, ai_transport: Any = None) -> FastAPI:
     """``request_transport``: an httpx transport for graph requests (tests pass a
-    ``MockTransport``); None = the real network."""
+    ``MockTransport``); None = the real network. ``ai_transport`` does the same for
+    the AI providers."""
     graphs_dir = graphs_dir or _default_graphs_dir()
     if headed is None:
         headed = os.environ.get("BUILDER_HEADED", "true").lower() not in ("0", "false", "no")
@@ -159,15 +171,35 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
 
     store = GraphStore(graphs_dir)
     manager = SessionManager(headed=headed, graphs_dir=graphs_dir, request_transport=request_transport)
+    from builder_api.ai.routes import router as ai_router
+    from builder_api.ai.service import Harness
+
+    ai = Harness(store, manager, ai_transport)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        yield
-        await manager.shutdown()
+        async def expire_connections():
+            while True:
+                await asyncio.sleep(30)
+                ai.prune()
+
+        expiry = asyncio.create_task(expire_connections())
+        try:
+            yield
+        finally:
+            expiry.cancel()
+            await asyncio.gather(expiry, return_exceptions=True)
+            tasks = [c.task for c in ai.connections.values() if c.task]
+            for token in list(ai.connections):
+                ai.disconnect(token)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await manager.shutdown()
 
     app = FastAPI(title="graphwright builder api", version="0.1.0", lifespan=lifespan)
     app.state.store = store
     app.state.manager = manager
+    app.state.ai = ai
+    app.include_router(ai_router(ai))
 
     app.add_middleware(
         CORSMiddleware,
@@ -187,6 +219,19 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
     @app.exception_handler(KeyError)
     async def key_error(_: Request, exc: KeyError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc.args[0]) if exc.args else "not found"})
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # Pydantic's default error includes submitted input, potentially passwords.
+        return JSONResponse(status_code=422, content={"detail": "Invalid request fields",
+                            "errors": [".".join(map(str, e["loc"])) + ": " + e["type"] for e in exc.errors()]})
+
+    @app.middleware("http")
+    async def private_responses(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith(("/sessions", "/ai")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -229,7 +274,9 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
             "extractor_fields": aliases(Extractor),
             "strategy_fields": list(Strategy.model_fields),
             "roles": ["button", "link", "textbox", "combobox", "checkbox", "radio", "tab", "menuitem",
-                      "option", "switch", "table", "heading", "img", "clickable", "fileinput", "slider", "generic"],
+                      "option", "switch", "table", "heading", "img", "clickable", "fileinput", "slider", "generic",
+                      "spinbutton", "treeitem", "menuitemcheckbox", "menuitemradio", "row", "cell", "gridcell",
+                      "columnheader", "rowheader", "dialog", "list", "listitem", "alert", "status", "progressbar", "meter"],
         }
 
     # --- graphs --------------------------------------------------------------------
@@ -322,23 +369,63 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
             if body.index >= len(scripts):
                 raise HTTPException(404, f"node {body.node!r} has {len(scripts)} script action(s)")
             spec = scripts[body.index]
-            code, into = spec.code, spec.into
+            try:
+                code, into = wf.script_source(spec), spec.into
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
             args = spec.args if not body.args else body.args
             timeout_ms, memory_mb, allow_secrets = spec.timeout_ms, spec.memory_mb, spec.allow_secrets
         try:
             credential = redeem(body.credential)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
-        # Like a builder session: what the author types for a password/credential
+        # Like a builder session: what the author types for a secure/credential
         # input is a Secret, so `allow_secrets` is enforced the way a run enforces it.
-        from graphwright.engine.secrets import Secret
+        from graphwright.engine.secrets import Secret, is_secure_input
 
         inputs = {
-            k: Secret(str(v)) if k in wf.inputs and (wf.inputs[k].credential or wf.inputs[k].type == "password") else v
+            k: Secret(str(v)) if k in wf.inputs and is_secure_input(wf.inputs[k]) else v
             for k, v in body.inputs.items()
         }
         return await run_script(wf, code, args=args, inputs=inputs, variables=body.vars, credential=credential,
                                 into=into, timeout_ms=timeout_ms, memory_mb=memory_mb, allow_secrets=allow_secrets)
+
+    @app.put("/graphs/{name}/page-filter", response_model=GraphView)
+    async def put_page_filter(name: str, body: PageFilterBody) -> GraphView:
+        return store.put_page_filter(name, body.value, body.expected)
+
+    @app.get("/graphs/{name}/targets")
+    async def list_targets(name: str, session_id: str | None = None) -> dict[str, Any]:
+        entries = store.target_views(name)
+        if session_id:
+            live = manager.get(session_id)
+            if live.graph_name != name:
+                raise HTTPException(409, "session belongs to another graph")
+            # Resolve saved definitions, not an older unpatched session graph.
+            import yaml
+            from graphwright.engine.schema import Target
+            from graphwright.engine.targets import resolve
+            from pydantic import ValidationError
+            state = live.session.last_state
+            if state:
+                for key, entry in entries.items():
+                    try:
+                        target = Target.model_validate(yaml.safe_load(entry["yaml"]))
+                    except (ValidationError, yaml.YAMLError):
+                        continue
+                    result = resolve(key, target, state)
+                    entry["report"] = {"ok": result.ok, "attempts": result.explain(target),
+                                       "element": result.element.model_dump(mode="json") if result.element else None,
+                                       "description": target.description}
+        return entries
+
+    @app.put("/graphs/{name}/targets/{target}", response_model=GraphView)
+    async def put_target(name: str, target: str, body: TargetBody) -> GraphView:
+        return store.put_target(name, target, body.yaml, body.expected_yaml)
+
+    @app.delete("/graphs/{name}/targets/{target}", response_model=GraphView)
+    async def delete_target(name: str, target: str) -> GraphView:
+        return store.delete_target(name, target)
 
     @app.post("/graphs/{name}/targets/from-element", status_code=201)
     async def target_from_element_ep(name: str, body: TargetFromElement) -> dict[str, Any]:
@@ -425,12 +512,21 @@ def create_app(*, graphs_dir: Path | None = None, headed: bool | None = None,
 
     @app.post("/sessions/{sid}/reset")
     async def reset(sid: str, body: ResetBody) -> dict[str, Any]:
-        return await manager.reset(sid, body.node)
+        return await _busy_guard(manager.reset(sid, body.node))
 
     @app.post("/sessions/{sid}/patch")
     async def patch(sid: str, body: YamlBody | None = None) -> dict[str, Any]:
+        if body is not None:
+            errors = store.lint_yaml(body.yaml)
+            if errors:
+                raise StoreError("graph cannot run until its errors are fixed", errors)
         wf = Workflow.from_yaml_text(body.yaml) if body and body.yaml else None
-        return await manager.patch(sid, wf)
+        try:
+            return await manager.patch(sid, wf)
+        except StoreError:
+            raise
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.post("/sessions/{sid}/observe")
     async def observe(sid: str) -> dict[str, Any]:

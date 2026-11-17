@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Run the api/ test suite including its database tests, against a throwaway
-``graphwright_test`` database on the compose postgres (``make up-host-ports``).
+``graphwright_test`` database on the compose postgres (``make stack:up-host-ports``).
 
 The DB fixtures TRUNCATE tables, so they refuse any database whose name does not
 end in ``_test``; this script creates that database if needed, migrates it and
@@ -32,7 +32,7 @@ def main(argv: list[str]) -> int:
         cwd=ROOT, capture_output=True, text=True,
     )
     if exists.returncode != 0:
-        print(exists.stderr or "is the stack up? (make up-host-ports)", file=sys.stderr)
+        print(exists.stderr or "is the stack up? (make stack:up-host-ports)", file=sys.stderr)
         return exists.returncode
     if exists.stdout.strip() != "1":
         sh(["docker", "compose", "exec", "-T", "postgres", "createdb", "-U", "graphwright", "graphwright_test"], cwd=ROOT)

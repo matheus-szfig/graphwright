@@ -58,8 +58,9 @@ function HudButton({ icon, label, title, onClick, disabled, tone = "default", sh
 /** Floating run/debug toolbar, top-center of the canvas (design: "Canvas Control HUDs"). */
 export function Player(p: PlayerProps) {
   const s = p.session
-  const canAct = !!s && s.status !== "stopped" && !p.busy && s.status !== "done" && s.status !== "failed"
-  const st = s ? STATUS[s.status] ?? STATUS.idle : { label: "READY", dot: "bg-success" }
+  const invalid = p.view.lint.length > 0
+  const canAct = !!s && s.status !== "stopped" && !invalid && !p.busy && s.status !== "done" && s.status !== "failed"
+  const st = invalid ? { label: "INVALID GRAPH", dot: "bg-danger" } : s ? STATUS[s.status] ?? STATUS.idle : { label: "READY", dot: "bg-success" }
 
   return (
     <div className="hud pointer-events-auto flex items-center gap-1 p-1.5">
@@ -67,8 +68,8 @@ export function Player(p: PlayerProps) {
         <>
           <button
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary-soft px-3 text-xs font-semibold text-[#1000a9] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={p.busy || p.missingInputs.length > 0}
-            title={p.missingInputs.length ? `fill inputs: ${p.missingInputs.join(", ")}` : `start a session — opens ${p.view.workflow.entry_url ?? "nothing (no entry_url)"}`}
+            disabled={invalid || p.busy || p.missingInputs.length > 0}
+            title={invalid ? "Fix the saved graph errors before starting" : p.missingInputs.length ? `fill inputs: ${p.missingInputs.join(", ")}` : `start a session — opens ${p.view.workflow.entry_url ?? "nothing (no entry_url)"}`}
             onClick={p.onStart}
           >
             <Icon name="play_arrow" size={18} fill />
@@ -83,7 +84,7 @@ export function Player(p: PlayerProps) {
           <HudButton icon="play_arrow" label="Run" title="run until a terminal node or a failure" shortcut="F5" onClick={p.onRun} disabled={!canAct} />
           <Divider />
           <HudButton icon="visibility" title="observe the page again" onClick={p.onObserve} disabled={p.busy} />
-          <HudButton icon="sync" title="patch: reload the graph from disk into the running session" onClick={p.onPatch} disabled={p.busy} />
+          <HudButton icon="sync" title="patch: reload the graph from disk into the running session" onClick={p.onPatch} disabled={invalid || p.busy} />
           <HudButton
             icon="my_location"
             title={p.selectedNode ? `continue from ${p.selectedNode}` : "select a node on the canvas to jump there"}
@@ -95,13 +96,20 @@ export function Player(p: PlayerProps) {
         </>
       )}
       <Divider />
+      {s?.patch_pending && <span className="text-xs text-warning">Patch queued</span>}
+      {s?.patch_error && <span className="max-w-48 truncate text-xs text-danger-soft" title={s.patch_error}>Patch needs attention</span>}
       <div className="flex h-8 items-center gap-2 rounded-lg bg-surface-container px-2.5" title={s?.url ?? ""}>
         <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
         <span className="label-caps text-on-surface-variant">{st.label}</span>
         {s && (
           <>
             <span className="text-outline">·</span>
-            <span className="mono max-w-[180px] truncate text-[11px] text-secondary-soft">{s.node}</span>
+            <span
+              className={`mono max-w-[180px] truncate text-[11px] ${s.status === "running" ? "font-semibold text-warning" : "text-secondary-soft"}`}
+              title={s.status === "running" ? `running ${s.node}` : s.node}
+            >
+              {s.node}
+            </span>
           </>
         )}
       </div>

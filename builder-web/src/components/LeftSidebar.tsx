@@ -1,26 +1,30 @@
 import { useEffect, useState } from "react"
 
-import { api, type ApiError, type GraphSummary, type GraphView, type InputSpec, type SessionSummary } from "@/api"
+import { api, type ApiError, type GraphSummary, type GraphView, type InputSpec, type SchemaBundle, type SessionSummary } from "@/api"
 import { useDialog } from "./dialog"
 import { Badge, Check, Icon, Section, cls, readFlag, writeFlag } from "./ui"
 
-export const INPUT_TYPES = ["string", "password", "email", "date", "number", "url", "otp"]
+// `secure` marks a secret input (`password` is its legacy alias).
+export const INPUT_TYPES = ["string", "secure", "email", "date", "number", "url", "otp"]
 // Fields a credential provider usually carries; any other name works too (free text).
 export const CREDENTIAL_FIELDS = ["username", "password", "token", "passphrase", "email"]
 const NODE_KINDS = ["step", "code", "outcome", "success", "failure"]
 
 export interface LeftSidebarProps {
   graphs: GraphSummary[]
+  schema: SchemaBundle | null
   view: GraphView
   session: SessionSummary | null
   values: Record<string, string>
   onValuesChange: (values: Record<string, string>) => void
+  /** Credential reference for the API's provider: fills `credential:` inputs and TOTP requests. */
   credential: string
   onCredentialChange: (ref: string) => void
   onOpenGraph: (name: string) => void
   onGraphChanged: (v: GraphView) => void
   onGraphDeleted: (name: string) => void
   onError: (msg: string, errors?: string[]) => void
+  busy: boolean
 }
 
 function useCollapsed(key: string) {
@@ -62,6 +66,7 @@ function GraphSection(p: LeftSidebarProps) {
   const [ng, setNg] = useState({ name: "", portal: "", url: "" })
   const [node, setNode] = useState({ name: "", kind: "step" })
   const nodeTaken = !!p.view.workflow.nodes[node.name]
+  const codeUnavailable = node.kind === "code" && !p.schema?.node_kinds?.includes("code")
 
   const wrap = async (fn: () => Promise<GraphView>, after?: () => void) => {
     try {
@@ -71,7 +76,7 @@ function GraphSection(p: LeftSidebarProps) {
       p.onError((e as ApiError).message, (e as ApiError).errors)
     }
   }
-  const addNode = () => node.name && !nodeTaken && wrap(() => api.graphs.addNode(p.view.name, node.name, node.kind), () => setNode({ ...node, name: "" }))
+  const addNode = () => node.name && !nodeTaken && !codeUnavailable && wrap(() => api.graphs.addNode(p.view.name, node.name, node.kind), () => setNode({ ...node, name: "" }))
   const deleteGraph = async () => {
     const name = p.view.name
     const ok = await dialog.confirm({
@@ -159,10 +164,17 @@ function GraphSection(p: LeftSidebarProps) {
               <option key={k}>{k}</option>
             ))}
           </select>
-          <button className={cls.primary} disabled={!node.name || nodeTaken} title={nodeTaken ? "a node with this name exists" : "add node (Enter)"} onClick={addNode}>
+          <button className={cls.primary} disabled={!node.name || nodeTaken || codeUnavailable} title={nodeTaken ? "a node with this name exists" : "add node (Enter)"} onClick={addNode}>
             <Icon name="add" size={16} />
           </button>
         </div>
+        {codeUnavailable && (
+          <p className="text-xs text-warning">
+            {p.schema ? "This API does not support code nodes." : "Code-node support could not be verified."}{" "}
+            Stop the existing builder API, run <span className="mono">make builder:local</span> again
+            (Docker: <span className="mono">make builder:up</span>), then reload this page.
+          </p>
+        )}
         <p className={cls.muted}>
           A step or code node is hooked from the start node so it lints; wire it on the canvas by dragging between ports. A code node runs
           sandboxed JavaScript over vars (Code tab).
@@ -175,7 +187,7 @@ function GraphSection(p: LeftSidebarProps) {
 // --- Inputs: declare, remove and fill workflow inputs -------------------------------------------
 
 function guessType(name: string, current: string): string {
-  if (/password|passwd|pwd|secret|passphrase/.test(name)) return "password"
+  if (/password|passwd|pwd|secret|passphrase|token/.test(name)) return "secure"
   if (/otp|totp|2fa|mfa|code$/.test(name)) return "otp"
   if (/e_?mail/.test(name)) return "email"
   if (/url|link|endpoint/.test(name)) return "url"
@@ -234,7 +246,7 @@ function InputsSection(p: LeftSidebarProps) {
         <div key={name} className="group space-y-1">
           <div className="flex items-center gap-2">
             <span className="mono min-w-0 flex-1 truncate text-[12px] text-on-surface" title={spec.description || name}>{`{${name}}`}</span>
-            <span className="mono text-[10px] text-faint">{spec.type}</span>
+            <span className="mono text-[10px] text-faint">{spec.type === "password" ? "secure" : spec.type}</span>
             {spec.credential && <Badge tone="secondary" title={`filled from the run's credential field "${spec.credential}"`}>cred:{spec.credential}</Badge>}
             {spec.pii && <Badge tone="tertiary" title="personal data / credential — redacted in events, never written to the graph">PII</Badge>}
             {!spec.required && <Badge tone="zinc" title="optional">opt</Badge>}
@@ -261,7 +273,7 @@ function InputsSection(p: LeftSidebarProps) {
                 : spec.default !== undefined && spec.default !== null ? `default: ${String(spec.default)}`
                 : `value for the next session (${spec.type})`
               }
-              type={spec.type === "password" || spec.credential === "password" ? "password" : "text"}
+              type={["password", "secure"].includes(spec.type) || spec.pii || !!spec.credential ? "password" : "text"}
               autoComplete="off"
               disabled={locked}
               value={shownValue(name, spec)}
@@ -316,7 +328,7 @@ function InputEditor({ name, spec, onSave, onCancel }: {
   onCancel: () => void
 }) {
   const [d, setD] = useState({
-    type: spec.type,
+    type: spec.type === "password" ? "secure" : spec.type,
     description: spec.description ?? "",
     required: spec.required,
     pii: spec.pii,

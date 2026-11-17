@@ -25,8 +25,10 @@ from graphwright.engine.conditions import evaluate
 from graphwright.engine.errors import EngineError
 from graphwright.engine.runtime import Event, GraphSession
 from graphwright.engine.schema import Condition
-from graphwright.engine.secrets import Redactor, Secret, SecretInputs
+from graphwright.engine.secrets import Redactor, Secret, SecretInputs, is_secure_input
 from graphwright.services import request_services
+
+from builder_api.graphs import GraphStore
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +52,10 @@ class LiveSession:
     subscribers: list[asyncio.Queue] = field(default_factory=list)
     busy: bool = False
     operation: asyncio.Task | None = None
+    # A reviewed patch saved while the session was busy; applied at the next step boundary.
+    pending_patch: Workflow | None = None
+    pending_inputs: dict[str, Any] = field(default_factory=dict, repr=False)
+    patch_error: str | None = None
 
     _state_pending: bool = field(default=False, init=False)
 
@@ -67,6 +73,7 @@ class LiveSession:
             "status": s.status, "visits": dict(s.visits), "busy": self.busy,
             "failure": s.redact(s.failure), "result": s.redact(s.result),
             "requests": s.request_statuses,
+            "patch_pending": self.pending_patch is not None, "patch_error": self.patch_error,
         }}
 
     def publish_state(self) -> None:
@@ -98,10 +105,12 @@ class LiveSession:
             "vars": s.redact(s.vars),
             "url": self.page.url if self.page else None,
             "busy": self.busy,
+            "patch_pending": self.pending_patch is not None,
+            "patch_error": self.patch_error,
         }
 
 
-def session_inputs(wf: Workflow, provided: dict[str, Any], credential: Credential | None) -> SecretInputs:
+def session_inputs(wf: Workflow, provided: dict[str, Any], credential: Credential | None = None) -> SecretInputs:
     """Inputs for a builder session: defaults, then what the author typed, then the
     credential's fields. Unlike a worker run, the author may type a credential input by
     hand (no provider configured); it is wrapped as a Secret either way."""
@@ -110,10 +119,9 @@ def session_inputs(wf: Workflow, provided: dict[str, Any], credential: Credentia
         if spec.credential and credential is not None and credential.values.get(spec.credential):
             out[name] = Secret(credential.values[spec.credential])
         elif name in provided and provided[name] not in (None, ""):
-            secret = bool(spec.credential) or spec.type == "password"
-            out[name] = Secret(str(provided[name])) if secret else provided[name]
+            out[name] = Secret(str(provided[name])) if is_secure_input(spec) else provided[name]
         elif spec.default is not None:
-            out[name] = spec.default
+            out[name] = Secret(str(spec.default)) if is_secure_input(spec) else spec.default
     missing = [k for k, spec in wf.inputs.items() if spec.required and k not in out]
     if missing:
         raise ValueError(f"missing inputs: {missing}")
@@ -153,27 +161,35 @@ class SessionManager:
     async def create(self, graph_name: str, inputs: dict[str, Any], *, fast: bool = False,
                      credential: str | None = None) -> LiveSession:
         path = self.graphs_dir / f"{graph_name}.yaml"
-        graph = compile_workflow(Workflow.from_yaml(path))
+        # Saved drafts may be invalid; execution compiles before any browser exists.
+        graph = compile_workflow(GraphStore(self.graphs_dir).load(graph_name))
         cred = redeem(credential)
         run_inputs = session_inputs(graph.workflow, inputs, cred)
         redactor = Redactor(cred.plaintexts if cred else ())
         redactor.add(*(v.reveal() for v in run_inputs.values() if isinstance(v, Secret)))
-        browser = await self._browser_instance()
-        # The worker's machine profile, so the builder sees the identity production presents.
-        context = await browser.new_context(**get_profile(settings.browser_default_profile).context_kwargs())
-        page = await context.new_page()
         sid = uuid.uuid4().hex[:8]
-        shown = {k: ("***" if isinstance(v, Secret) else v) for k, v in run_inputs.items()}
-        live = LiveSession(id=sid, graph_name=graph_name, graph_path=path, inputs=shown, context=context,
-                           page=page, session=None, credential_ref=credential)  # type: ignore[arg-type]
-        budget = StealthBudget(scale=0.15) if fast else None
-        services = request_services(totp=cred.totp if cred else None, on_secret=redactor.add,
-                                   transport=self.request_transport)
-        live.session = GraphSession(graph, page, run_inputs, budget=budget, on_event=live.publish,
-                                    redactor=redactor, services=services)
-        self.sessions[sid] = live
-        await self._guard(live, live.session.start())
-        return live
+        context = None
+        try:
+            browser = await self._browser_instance()
+            # The worker's machine profile, so the builder sees the identity production presents.
+            context = await browser.new_context(**get_profile(settings.browser_default_profile).context_kwargs())
+            page = await context.new_page()
+            shown = {k: ("***" if isinstance(v, Secret) else v) for k, v in run_inputs.items()}
+            live = LiveSession(id=sid, graph_name=graph_name, graph_path=path, inputs=shown, context=context,
+                               page=page, session=None, credential_ref=credential)  # type: ignore[arg-type]
+            budget = StealthBudget(scale=0.15) if fast else None
+            services = request_services(totp=cred.totp if cred else None, on_secret=redactor.add,
+                                       transport=self.request_transport)
+            live.session = GraphSession(graph, page, run_inputs, budget=budget, on_event=live.publish,
+                                        redactor=redactor, services=services)
+            self.sessions[sid] = live
+            await self._guard(live, live.session.start())
+            return live
+        except BaseException:
+            self.sessions.pop(sid, None)
+            if context:
+                await context.close()
+            raise
 
     def get(self, sid: str) -> LiveSession:
         try:
@@ -192,30 +208,98 @@ class SessionManager:
             return await coro
         finally:
             live.operation = None
+            self._apply_pending(live)
             live.busy = False
             live.publish_state()
 
     async def step(self, sid: str) -> dict[str, Any]:
         live = self.get(sid)
+        compile_workflow(GraphStore(self.graphs_dir).load(live.graph_name))
         await self._guard(live, live.session.step())
         return live.summary()
 
     async def run(self, sid: str, max_steps: int | None = None) -> dict[str, Any]:
         live = self.get(sid)
-        await self._guard(live, live.session.run(max_steps=max_steps))
+        compile_workflow(GraphStore(self.graphs_dir).load(live.graph_name))
+
+        def boundary():
+            self._apply_pending(live)
+            return live.patch_error is None
+
+        await self._guard(live, live.session.run(max_steps=max_steps, on_step=boundary))
         return live.summary()
 
     async def reset(self, sid: str, node: str) -> dict[str, Any]:
         live = self.get(sid)
+        if live.busy:
+            raise RuntimeError("session is busy")
         live.session.reset_to(node)
         return live.summary()
 
-    async def patch(self, sid: str, workflow: Workflow | None = None) -> dict[str, Any]:
+    async def patch(self, sid: str, workflow: Workflow | None = None,
+                    new_inputs: dict[str, Any] | None = None) -> dict[str, Any]:
         """Reload the graph (from disk by default) into the running session."""
         live = self.get(sid)
-        wf = workflow or Workflow.from_yaml(live.graph_path)
-        live.session.patch(wf)
+        wf = workflow or GraphStore(self.graphs_dir).load(live.graph_name)
+        compile_workflow(wf)
+        self._check_patch(live, wf, new_inputs)
+        live.patch_error = None
+        if live.busy:
+            live.pending_patch = wf.model_copy(deep=True)
+            live.pending_inputs = dict(new_inputs or {})
+        else:
+            self._patch_now(live, wf, new_inputs)
+        live.publish_state()
         return live.summary()
+
+    @staticmethod
+    def _check_patch(live: LiveSession, wf: Workflow, new_inputs: dict[str, Any] | None = None) -> None:
+        if live.session.node not in wf.nodes:
+            raise ValueError("Patch would remove the current node. Choose a compatible node first.")
+        old = live.session.workflow
+        supplied = new_inputs or {}
+        if any(name in old.inputs or name not in wf.inputs for name in supplied):
+            raise ValueError("A patch may supply only newly declared inputs.")
+        for name, spec in wf.inputs.items():
+            if name not in old.inputs:
+                if spec.required and supplied.get(name) in (None, "") and spec.default is None:
+                    raise ValueError("Fill the new required inputs locally before patching, or save the graph without patching.")
+            elif spec != old.inputs[name]:
+                raise ValueError("Changed input declarations require a new session.")
+        if any(name not in wf.inputs for name in old.inputs):
+            raise ValueError("Removing session inputs requires a new session.")
+        if wf.entry_url != old.entry_url or wf.portal != old.portal:
+            raise ValueError("Changing the portal or entry URL requires a new session.")
+
+    @classmethod
+    def _patch_now(cls, live: LiveSession, wf: Workflow, new_inputs: dict[str, Any] | None = None) -> None:
+        cls._check_patch(live, wf, new_inputs)
+        added = wf.model_copy(update={"inputs": {k: v for k, v in wf.inputs.items()
+                                                if k not in live.session.workflow.inputs}})
+        inputs = session_inputs(added, new_inputs or {})
+        changed = {name for name, spec in wf.requests.items()
+                   if spec != live.session.workflow.requests.get(name)}
+        live.session.patch(wf)
+        live.session.inputs.update(inputs)
+        for name, value in inputs.items():
+            private = isinstance(value, Secret) or wf.inputs[name].pii
+            live.inputs[name] = "***" if private else value
+            if private and hasattr(live.session._redact, "add"):
+                live.session._redact.add(value.reveal() if isinstance(value, Secret) else str(value))
+        for name in changed:
+            live.session.requests.results.pop(name, None)
+
+    @classmethod
+    def _apply_pending(cls, live: LiveSession) -> None:
+        wf, live.pending_patch = live.pending_patch, None
+        inputs, live.pending_inputs = live.pending_inputs, {}
+        if wf is None:
+            return
+        try:
+            cls._patch_now(live, wf, inputs)
+        except ValueError as exc:
+            live.patch_error = str(exc)
+        live.publish_state()
 
     async def observe(self, sid: str) -> dict[str, Any]:
         live = self.get(sid)
@@ -359,6 +443,8 @@ class SessionManager:
         live = self.sessions.pop(sid, None)
         if live is None:
             return
+        live.pending_patch = None
+        live.pending_inputs.clear()
         if live.operation and live.operation is not asyncio.current_task():
             live.operation.cancel()
             await asyncio.gather(live.operation, return_exceptions=True)

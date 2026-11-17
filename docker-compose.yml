@@ -10,7 +10,7 @@
 #   builder-*  dev-only graph builder (profile: builder)
 #   nginx      the only service that publishes a host port
 #
-# Per-app env comes from each app's .env.docker (`make setup-env`). Dev loop:
+# Per-app env comes from each app's .env.docker (`make env:setup`). Dev loop:
 # `docker compose watch` — Python services sync+restart, Vite syncs (HMR), and
 # dependency/build changes rebuild. Source and config are never bind-mounted;
 # volumes are for persistence only (postgres, rustfs) — the one exception is the
@@ -19,7 +19,7 @@
 #
 # Networks mirror a cloud layout: `edge` (what nginx reaches) and `internal`
 # (datastores, worker, demo-site). Host tools that need postgres/redis/rustfs/
-# demo-site directly: layer docker-compose.host-ports.yml (`make up-host-ports`).
+# demo-site directly: layer docker-compose.host-ports.yml (`make stack:up-host-ports`).
 
 name: graphwright
 
@@ -195,7 +195,7 @@ services:
 
   # --- graph builder — dev-only (profiles: [builder]) ---------------------------
   # Inside Docker the browser is headless. For the normal loop (watching a headed
-  # browser) run it on the host: `make builder-local` (add NGINX=1 to route
+  # browser) run it on the host: `make builder:local` (add NGINX=1 to route
   # http://localhost:8080/builder/ to it).
   builder-api:
     profiles: ["builder"]
@@ -219,6 +219,9 @@ services:
         - action: sync+restart
           path: ./engine/src
           target: /app/engine/src
+        - action: sync
+          path: ./docs/engine-yaml
+          target: /app/docs/engine-yaml
         - action: rebuild
           path: ./builder-api/pyproject.toml
         - action: rebuild

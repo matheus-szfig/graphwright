@@ -6,7 +6,8 @@
 // JavaScript in the page (isolated world by default, or the page's own `main` world)
 // and need a session. The console at the bottom runs ad-hoc page JavaScript the same
 // way. Edits to code here are a scratch copy for testing; the YAML is what is saved.
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo } from "react"
+import { useDraft, useWorkspaceState, workspaceKey } from "@/workspace"
 
 import { api, type ApiError, type ConsoleResult, type EvaluateSpec, type GraphView, type ScriptReport, type ScriptSpec, type SessionSummary } from "@/api"
 import { CodeEditor } from "@/editor/CodeEditor"
@@ -52,12 +53,14 @@ export function CodePanel(p: CodePanelProps) {
     () => Object.keys(p.view.workflow.nodes).filter((n) => codeActions(p.view, n).length > 0),
     [p.view],
   )
-  const [node, setNode] = useState<string | undefined>(undefined)
+  const [node, setNode] = useWorkspaceState<string | undefined>(workspaceKey("code", p.view.name, "selected"),
+    () => p.selected && withCode.includes(p.selected) ? p.selected : withCode[0])
+  const [lastSelected, setLastSelected] = useWorkspaceState(workspaceKey("code", p.view.name, "canvas-selection"), p.selected)
   useEffect(() => {
-    if (p.selected && withCode.includes(p.selected)) setNode(p.selected)
+    if (p.selected !== lastSelected && p.selected && withCode.includes(p.selected)) setNode(p.selected)
     else if (!node || !withCode.includes(node)) setNode(withCode[0])
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.selected, withCode])
+    setLastSelected(p.selected)
+  }, [p.selected, withCode, node, lastSelected, setNode, setLastSelected])
   const actions = node ? codeActions(p.view, node) : []
 
   return (
@@ -111,11 +114,17 @@ function EmptyHint() {
 
 function CodeActionCard(p: CodePanelProps & { node: string; action: CodeAction }) {
   const { action } = p
-  const saved = action.verb === "script" ? action.spec.code : action.spec.script
-  const [code, setCode] = useState(saved)
-  const [argsText, setArgsText] = useState(pretty(action.spec.args))
-  const modified = code !== saved
-  useEffect(() => setCode(saved), [saved])
+  const saved = (action.spec.ref ? p.view.workflow.scripts?.[action.spec.ref]
+    : action.verb === "script" ? action.spec.code : action.spec.script) ?? ""
+  const identity = workspaceKey(p.node, action.index, action.verb)
+  const codeDraft = useDraft(p.view.name, "code", `${identity}:code`, saved)
+  const argsDraft = useDraft(p.view.name, "code", `${identity}:args`, pretty(action.spec.args))
+  const { text: code, edit: setCode, receive: receiveCode } = codeDraft
+  const { text: argsText, edit: setArgsText, receive: receiveArgs } = argsDraft
+  const modified = codeDraft.dirty || argsDraft.dirty
+  const savedArgs = pretty(action.spec.args)
+  useEffect(() => { receiveCode(saved); receiveArgs(savedArgs) }, [saved, savedArgs, receiveCode, receiveArgs])
+  const stateKey = workspaceKey("code-test", p.view.name, identity)
 
   return (
     <div className="space-y-2 rounded border border-outline-variant bg-surface-low p-2">
@@ -124,6 +133,7 @@ function CodeActionCard(p: CodePanelProps & { node: string; action: CodeAction }
         <span className="mono text-on-surface">
           #{action.index} {action.verb}
         </span>
+        {action.spec.ref && <Badge tone="primary">scripts.{action.spec.ref}</Badge>}
         {action.spec.into ? <Badge tone="primary">into {action.spec.into}</Badge> : <Badge tone="zinc">sets returned keys</Badge>}
         {action.verb === "script" && (
           <Badge tone="zinc" title="sandbox limits">
@@ -137,16 +147,17 @@ function CodeActionCard(p: CodePanelProps & { node: string; action: CodeAction }
         )}
         {action.spec.allow_secrets && <Badge tone="tertiary">allow_secrets</Badge>}
         {modified && (
-          <button className={`${cls.ghost} ml-auto`} onClick={() => setCode(saved)} title="discard the scratch edit">
+          <button className={`${cls.ghost} ml-auto`} onClick={() => { codeDraft.discard(); argsDraft.discard() }} title="discard the scratch edit">
             <Icon name="undo" size={14} /> modified (not saved)
           </button>
         )}
       </div>
-      <CodeEditor value={code} onChange={setCode} className="max-h-64 overflow-auto" />
+      {(codeDraft.conflict || argsDraft.conflict) && <p className="text-warning">The saved action changed. Your scratch edits have been kept.</p>}
+      <CodeEditor memoryKey={codeDraft.key} value={code} onChange={setCode} className="max-h-64 overflow-auto" />
       {action.verb === "script" ? (
-        <ScriptTester {...p} code={code} argsText={argsText} setArgsText={setArgsText} spec={action.spec} />
+        <ScriptTester {...p} stateKey={stateKey} code={code} argsText={argsText} setArgsText={setArgsText} spec={action.spec} />
       ) : (
-        <EvaluateRunner {...p} code={code} argsText={argsText} setArgsText={setArgsText} spec={action.spec} />
+        <EvaluateRunner {...p} stateKey={stateKey} code={code} argsText={argsText} setArgsText={setArgsText} spec={action.spec} />
       )}
     </div>
   )
@@ -164,13 +175,14 @@ function ArgsBox({ text, setText, label = "args (JSON — templates like {input}
 }
 
 function ScriptTester(
-  p: CodePanelProps & { code: string; argsText: string; setArgsText: (v: string) => void; spec: ScriptSpec },
+  p: CodePanelProps & { stateKey: string; code: string; argsText: string; setArgsText: (v: string) => void; spec: ScriptSpec },
 ) {
-  const declared = Object.entries(p.view.workflow.inputs).filter(([, s]) => !s.credential)
-  const [inputs, setInputs] = useState<Record<string, string>>(() => Object.fromEntries(declared.map(([k]) => [k, p.values[k] ?? ""])))
-  const [varsText, setVarsText] = useState("{}")
-  const [busy, setBusy] = useState(false)
-  const [report, setReport] = useState<ScriptReport | null>(null)
+  // Every input, credential ones included: typed by hand or filled from the credential reference.
+  const declared = Object.entries(p.view.workflow.inputs)
+  const [inputs, setInputs] = useWorkspaceState<Record<string, string>>(workspaceKey(p.stateKey, "inputs"), () => Object.fromEntries(declared.map(([k]) => [k, p.values[k] ?? ""])))
+  const [varsText, setVarsText] = useWorkspaceState(workspaceKey(p.stateKey, "vars"), "{}")
+  const [busy, setBusy] = useWorkspaceState(workspaceKey(p.stateKey, "busy"), false)
+  const [report, setReport] = useWorkspaceState<ScriptReport | null>(workspaceKey(p.stateKey, "report"), null)
   useEffect(() => {
     setInputs((cur) => Object.fromEntries(declared.map(([k]) => [k, cur[k] || p.values[k] || ""])))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -208,7 +220,7 @@ function ScriptTester(
                 <span className="mono w-24 shrink-0 truncate text-muted" title={s.description}>{k}</span>
                 <input
                   className={`${cls.input} min-w-0 flex-1`}
-                  type={s.type === "password" ? "password" : "text"}
+                  type={s.type === "password" || s.credential ? "password" : "text"}
                   autoComplete="off"
                   placeholder={s.default != null ? `default: ${String(s.default)}` : ""}
                   value={inputs[k] ?? ""}
@@ -250,10 +262,10 @@ function ScriptTester(
 }
 
 function EvaluateRunner(
-  p: CodePanelProps & { code: string; argsText: string; setArgsText: (v: string) => void; spec: EvaluateSpec },
+  p: CodePanelProps & { stateKey: string; code: string; argsText: string; setArgsText: (v: string) => void; spec: EvaluateSpec },
 ) {
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<ConsoleResult | null>(null)
+  const [busy, setBusy] = useWorkspaceState(workspaceKey(p.stateKey, "busy"), false)
+  const [result, setResult] = useWorkspaceState<ConsoleResult | null>(workspaceKey(p.stateKey, "result"), null)
   const args = parseObject(p.argsText)
   const hasTemplates = /\{[a-zA-Z_][\w.[\]]*\}/.test(p.argsText)
   const run = async () => {
@@ -322,11 +334,13 @@ export function ResultView(r: {
 interface ConsoleEntry { id: number; script: string; world: string; frame: number; result: ConsoleResult }
 
 function Console(p: CodePanelProps) {
-  const [code, setCode] = useState("return document.title")
-  const [world, setWorld] = useState<"isolated" | "main">("isolated")
-  const [frame, setFrame] = useState(0)
-  const [busy, setBusy] = useState(false)
-  const [history, setHistory] = useState<ConsoleEntry[]>([])
+  const draft = useDraft(p.view.name, "code", "console", "return document.title")
+  const { text: code, edit: setCode } = draft
+  const key = (field: string) => workspaceKey("console", p.view.name, field)
+  const [world, setWorld] = useWorkspaceState<"isolated" | "main">(key("world"), "isolated")
+  const [frame, setFrame] = useWorkspaceState(key("frame"), 0)
+  const [busy, setBusy] = useWorkspaceState(key("busy"), false)
+  const [history, setHistory] = useWorkspaceState<ConsoleEntry[]>(key("history"), [])
   const sid = p.session?.id
 
   const run = async () => {
@@ -349,7 +363,8 @@ function Console(p: CodePanelProps) {
         <span className={cls.label}>Page console</span>
         <span className="text-faint">async function body · return a JSON value · Ctrl+Enter runs</span>
       </div>
-      <CodeEditor value={code} onChange={setCode} onSubmit={() => void run()} className="max-h-48 overflow-auto" />
+      <CodeEditor memoryKey={draft.key} value={code} onChange={setCode} onSubmit={() => void run()} className="max-h-48 overflow-auto" />
+      {draft.dirty && <button className={cls.ghost} onClick={draft.discard}>Discard console draft</button>}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex overflow-hidden rounded border border-outline-variant">
           {(["isolated", "main"] as const).map((w) => (

@@ -16,6 +16,8 @@ import { GraphCanvas } from "./components/GraphCanvas"
 import { Inspector } from "./components/Inspector"
 import { LeftSidebar } from "./components/LeftSidebar"
 import { Player } from "./components/Player"
+import { AiPanel } from "./components/AiPanel"
+import { SessionResult } from "./components/SessionResult"
 import { Badge, Icon, cls } from "./components/ui"
 
 interface Toast { msg: string; errors: string[]; kind: "error" | "notice" }
@@ -34,6 +36,7 @@ export default function App() {
   const [schema, setSchema] = useState<SchemaBundle | null>(null)
   const [completions, setCompletions] = useState<GraphCompletions | null>(null)
   const [values, setValues] = useState<Record<string, string>>({})
+  // Credential reference resolved by the API's provider (CREDENTIAL_PROVIDER), like a worker run's.
   const [credential, setCredential] = useState("")
   const [fast, setFast] = useState(true)
   const ws = useRef<WebSocket | null>(null)
@@ -42,7 +45,7 @@ export default function App() {
   const left = useSidebar("left", 300)
 
   const fail = useCallback((msg: string, errors: string[] = []) => {
-    setToast({ msg, errors, kind: "error" })
+    setToast({ msg, errors: [...new Set(errors)].filter((e) => e !== msg), kind: "error" })
     window.setTimeout(() => setToast(null), 8000)
   }, [])
   const notice = useCallback((msg: string) => {
@@ -172,7 +175,7 @@ export default function App() {
 
   const sid = session?.status === "stopped" ? undefined : session?.id
   const start = () =>
-    view &&
+    view && !view.lint.length &&
     act(async () => {
       const s = await api.sessions.create(view.name, values, fast, credential)
       setSession(s)
@@ -213,7 +216,7 @@ export default function App() {
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {graphs.length === 0 ? (
           <div className="space-y-3 text-center">
-            <p>No graphs found{health ? "" : " — is the builder API running? (make builder-local)"}.</p>
+            <p>No graphs found{health ? "" : " — is the builder API running? (make builder:local)"}.</p>
             <FirstGraph onCreated={(v) => { setView(v); void loadGraphs() }} onError={fail} />
           </div>
         ) : (
@@ -223,9 +226,8 @@ export default function App() {
     )
   }
 
-  // Required inputs the next session still needs: not typed, no default, and not
-  // coming from the credential reference.
   const missing = Object.entries(view.workflow.inputs)
+    // Required and still missing: not typed, no default, and not coming from the credential reference.
     .filter(([n, spec]) => spec.required && !values[n] && (spec.default === undefined || spec.default === null) && !(spec.credential && credential))
     .map(([n]) => n)
 
@@ -250,9 +252,9 @@ export default function App() {
           {view.workflow.risk === "protected" && <Badge tone="warning">protected</Badge>}
         </nav>
         <span className="ml-auto flex items-center gap-2">
-          {!schema && (
-            <Badge tone="warning" dot title="GET /schema failed — the API predates this UI. Restart it (make builder-local) for schema completions.">
-              API outdated
+          {(!schema || !schema.node_kinds?.includes("code")) && (
+            <Badge tone="warning" dot title="The API schema is unavailable or lacks code nodes. Stop the existing builder API, run make builder:local again (Docker: make builder:up), then reload this page.">
+              {schema ? "API outdated" : "Schema unavailable"}
             </Badge>
           )}
           <Badge tone={health ? (health.headed ? "secondary" : "zinc") : "danger"} dot title="browser mode of the API">
@@ -265,15 +267,17 @@ export default function App() {
         <aside className="shrink-0 overflow-hidden border-r border-outline-variant bg-surface" style={{ width: left.collapsed ? 0 : left.width }}>
           <LeftSidebar
             graphs={graphs}
+            schema={schema}
             view={view}
-            session={session}
+            session={session?.status === "stopped" ? null : session}
             values={values}
             onValuesChange={setValues}
-            credential={credential}
-            onCredentialChange={setCredential}
             onOpenGraph={(name) => void openGraph(name)}
             onGraphChanged={onGraphChanged}
             onGraphDeleted={(name) => void onGraphDeleted(name)}
+            credential={credential}
+            onCredentialChange={setCredential}
+            busy={busy}
             onError={fail}
           />
         </aside>
@@ -282,6 +286,7 @@ export default function App() {
         {/* canvas + floating HUDs */}
         <div className="relative min-w-0 flex-1">
           <GraphCanvas
+            key={view.name}
             view={view}
             current={session?.node}
             status={session?.status}
@@ -339,11 +344,7 @@ export default function App() {
               </span>
             </div>
           )}
-          {session?.result && (
-            <div className="hud pointer-events-auto absolute bottom-4 left-1/2 max-w-xl -translate-x-1/2 border-success/40 px-3 py-2 text-xs text-success">
-              <span className="mono">{JSON.stringify(session.result)}</span>
-            </div>
-          )}
+          {session?.result && <SessionResult key={session.id} result={session.result} />}
         </div>
 
         <Divider side="right" bar={right} />
@@ -352,9 +353,6 @@ export default function App() {
             view={view}
             selected={selected}
             sessionId={sid}
-            session={session}
-            values={values}
-            credential={credential}
             events={events}
             page={page}
             schema={schema}
@@ -362,9 +360,19 @@ export default function App() {
             onGraphChanged={onGraphChanged}
             onError={fail}
             onNotice={notice}
+            session={session}
+            values={values}
+            credential={credential}
+            onObserve={sid ? () => act(() => api.sessions.observe(sid), () => refreshSession(sid)) : undefined}
+            busy={busy}
           />
         </aside>
       </div>
+
+      <AiPanel key={view.name} view={view} selected={selected}
+        sessionId={session?.graph === view.name ? sid : undefined}
+        values={values} privateValues={[]}
+        onGraphChanged={onGraphChanged} onSessionChanged={refreshSession} />
 
       {toast && (
         <div className={`hud fixed bottom-4 left-4 z-50 max-w-xl p-3 text-xs ${toast.kind === "error" ? "border-danger/40 text-danger-soft" : "border-success/40 text-success"}`}>

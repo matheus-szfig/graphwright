@@ -83,7 +83,7 @@ export interface SectionProps {
 /** A docked-rail block: label-caps header with a chevron, bordered body. */
 export function Section({ title, icon, collapsed, onToggle, summary, actions, children }: SectionProps) {
   return (
-    <section className="mx-3 overflow-hidden rounded-md border border-outline-variant bg-surface-container">
+    <section className="mx-3 shrink-0 overflow-hidden rounded-md border border-outline-variant bg-surface-container">
       <div className={`flex items-center gap-2 px-3 py-2 ${collapsed ? "" : "border-b border-outline-variant"}`}>
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle} title={collapsed ? `expand ${title}` : `collapse ${title}`}>
           <Icon name={collapsed ? "chevron_right" : "expand_more"} size={16} className="shrink-0 text-faint" />

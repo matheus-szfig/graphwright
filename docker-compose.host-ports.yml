@@ -3,9 +3,9 @@
 # worker started with `uv run celery …`, the headed builder reaching demo-site).
 #
 #   docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d
-#   (or: make up-host-ports)
+#   (or: make stack:up-host-ports)
 #
-# Bound to 127.0.0.1 only. Ports match what `make setup-env-local` writes.
+# Bound to 127.0.0.1 only. Ports match what `make env:local` writes.
 
 services:
   redis:

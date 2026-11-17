@@ -51,6 +51,10 @@ class UnknownState(StructuralError):
     """Current page matches no node's `recognize`."""
 
 
+class RecognitionFailed(StructuralError):
+    """The expected node does not recognize the page; global recovery is disabled."""
+
+
 class LoopGuard(StructuralError):
     pass
 

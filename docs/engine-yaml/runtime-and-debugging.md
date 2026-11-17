@@ -16,9 +16,10 @@ responsible for the browser's initial page. The builder starts a fresh context.
 1. Check the global step limit (default 60 at the `GraphSession` level; not a YAML field).
 2. If the current node is terminal, finish immediately.
 3. Observe and evaluate the current node's `recognize`.
-4. If recognition fails, find the first recognizable node in declaration order and
-   move there. That node's actions execute on a subsequent step. If none matches,
-   report `UnknownState`.
+4. If recognition fails, report `RecognitionFailed` before running any actions and
+   stop or follow the node's `on_fail` route. Only with workflow `resync: global`,
+   search all nodes in declaration order and move to the first match; if none matches,
+   report `UnknownState`. A recovery node's actions execute on a subsequent step.
 5. Increment the recognized visit count and enforce `max_visits`.
 6. Run actions in order, retrying individual transient failures according to node policy.
 7. Re-observe and evaluate transitions in order. If none matches, wait for page signature
@@ -29,18 +30,31 @@ responsible for the browser's initial page. The builder starts a fresh context.
 **Run** repeats steps until a terminal, failure, repair stop, or its step budget.
 Reaching a configured iteration limit is not proof of successful completion: inspect status.
 
-## Recognition is a recovery mechanism
+## Recognition guards the expected node
 
-Recognition can redirect a run whose browser no longer matches the expected node.
-Write predicates specific enough that recovery selects the correct operation.
+By default (`resync: disabled`), a recognition mismatch cannot redirect execution to
+an unrelated matching node. Normal routing follows the current node's transitions;
+explicit `jump`, `on_fail`, and builder **Go to** remain available. A destination's
+recognition is checked on its next step, before its actions run; selecting a transition
+does not imply the destination already recognizes the page.
+
+To opt into automatic global recovery, add this at the workflow root:
+
+```yaml
+resync: global
+```
+
+This permits recovery to any matching node, even without a connecting transition.
+The first match in YAML declaration order wins. Existing graphs that relied on automatic
+resynchronization must explicitly enable it or declare the desired recovery routes.
 
 Two nodes can recognize the same route but represent different phases. Add distinguishing
 controls or runtime vars when possible. For example, a "submit form" node should
 recognize the form, while a "summarize extracted data" node can require that extracted
-data is set. Otherwise an unrelated broad node can capture recovery.
+data is set. With global recovery enabled, an unrelated broad node can capture recovery.
 
 `recognize: {always: true}` is useful for pure computation, but it always qualifies
-during resynchronization too. An always node placed early may mask an unexpected page.
+during opt-in global resynchronization too. An always node placed early may mask an unexpected page.
 Prefer a route/data predicate, or deliberately place narrow page nodes earlier. This
 is especially relevant to the stub created by the builder's **Add code node** action.
 
@@ -138,7 +152,7 @@ recover:
 
 `vars._error` remains until something overwrites it or the session ends. It is not a
 freshness flag. A recovery node must also recognize correctly; a broad recovery node
-can participate in resynchronization like any other node.
+can participate in resynchronization like any other node when `resync: global` is enabled.
 
 Common error types:
 
@@ -146,7 +160,8 @@ Common error types:
 |---|---|
 | `TargetNotFound` | No observed or live fallback strategy resolved. Inspect Targets and Page. |
 | `NotActionable` | Element resolved but is hidden, disabled, off-screen, or covered. |
-| `UnknownState` | No node recognizes the observation. Inspect page route, alerts, frames, and predicates. |
+| `RecognitionFailed` | The expected node did not recognize the page; its actions did not run. Inspect that node's predicate reasons and the incoming transition. Global recovery is disabled. |
+| `UnknownState` | Global recovery was enabled, but no node recognized the observation. Inspect page route, alerts, frames, and predicates. |
 | `NoTransition` | No transition became true before timeout. Inspect transition traces and unconditional branches. |
 | `PostconditionFailed` | A transition matched but an additional required condition did not. |
 | `LoopGuard` | Node visits or global steps exceeded the configured bound. |
@@ -172,7 +187,8 @@ an unexpected structural exception in every wrapper.
 
 ## Builder debugging sequence
 
-1. **Graph YAML / Node:** fix schema and compiler errors before saving. A new node is
+1. **Graph YAML / Node:** save work at any time, including syntax, schema, and compiler
+   errors. Fix errors before execution. A new node is
    attached by the builder so it is reachable, but its default edges are only scaffolding.
    Rewire it deliberately; an earlier always transition can make a later edge useless.
 2. **Page:** inspect the actual route, headings, alerts, element names/states, and frames.
@@ -188,13 +204,34 @@ an unexpected structural exception in every wrapper.
 7. Save the corrected YAML, **Patch**, then observe before proceeding. For changed
    credentials, request cache, or loop budgets, use a new session.
 
+## Saving unfinished work
+
+Graph YAML and Node Save buttons (including Ctrl/Cmd+S) accept invalid work. For
+example, rename a target in Graph YAML, save the temporary missing-reference error,
+then update its node references and save again. Diagnostics remain visible after saving
+and reopening. A successful save clears that editor's unsaved WIP badge even if the
+saved graph has errors; the separate invalid-graph indicator remains until repaired.
+
+Graph YAML saves retain the submitted text, including malformed YAML. If the whole
+document cannot be parsed, repair it in Graph YAML. Invalid nodes in a parseable graph
+remain selectable. A node fragment with malformed YAML syntax is stored as a string at
+that node key so other nodes stay accessible; opening that node restores the fragment
+for repair. This is deliberately invalid engine schema and cannot run. The canvas may
+show placeholders for invalid nodes; these placeholders are never written or executed.
+
+Builder Start, Step, Run, and Patch reject an invalid saved graph on the server as well
+as in the UI. The runs API rejects it at intake, and worker startup compiles the file before
+redeeming a credential or opening the run's browser context; invalid schema/YAML is recorded as `graph_invalid`.
+An already executing run retains its previously compiled snapshot. Saving edits does
+not mutate that snapshot; after repairing and saving, Patch or start a fresh session.
+
 ## Troubleshooting table
 
 | Symptom | Likely cause and next step |
 |---|---|
 | `unknown node kind 'code'` when adding a node | UI is newer than the running builder API. Restart the actual API process/rebuild container and reload the page. Do not add `kind: code` to YAML. |
 | A new node saves but never executes | A preceding unconditional edge shadows it, or the graph never reaches its source. Read transition order. |
-| A node immediately jumps to a different node | Recognition failed and resynchronization selected another predicate. |
+| A node immediately jumps to a different node | Inspect `resync`, `jump`, `on_fail`, and `reset` events. Global resynchronization requires `resync: global`. |
 | `text` never matches a heading | Default scope is alerts; add `in: headings`. |
 | CSS action works but recognition does not | Named CSS-only targets cannot be resolved from PageState predicates. |
 | OTP service is called twice | Both explicit fetch and a lazy request template were used, or multiple args rendered independently. Reuse the fetched var. |

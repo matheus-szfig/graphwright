@@ -25,13 +25,14 @@ export interface SchemaBundle {
 export interface GraphCompletions {
   nodes: string[]; targets: string[]; inputs: string[]; shapers: string[]; macros: string[]
   requests?: Record<string, string[]> // request name → fields readable as {requests.<name>.<field>}
+  scripts?: string[]
 }
 
 // Keys whose value is a template ({input}, {vars.x}, {requests.r.field}).
 const TEMPLATE_KEYS = ["value", "url", "option", "secret", "body", "username", "password", "host", "entry_url"]
 
 export interface EditorContext {
-  root: "workflow" | "node"
+  root: "workflow" | "node" | "target"
   schema: SchemaBundle | null
   graph: GraphCompletions | null
   page: PageState | null
@@ -122,7 +123,9 @@ export function yamlCompletionSource(getCtx: () => EditorContext) {
     const doc = cx.state.doc.toString()
     const yc = yamlContextAt(doc, cx.pos)
     // Without the schema (API not restarted yet) we still offer graph + page suggestions.
-    const root = ec.schema ? (ec.root === "workflow" ? ec.schema.workflow : ec.schema.node) : {}
+    const root = ec.schema ? (ec.root === "target"
+      ? { ...ec.schema.workflow.$defs?.Target, $defs: ec.schema.workflow.$defs }
+      : ec.root === "workflow" ? ec.schema.workflow : ec.schema.node) : {}
     const shaperNames = ec.graph?.shapers ?? ec.schema?.shapers ?? []
     const allRoles = ec.schema?.roles ?? []
     const inStrategy = yc.path.includes("strategies") || yc.path.includes("visible") || yc.path.includes("hidden")
@@ -184,6 +187,7 @@ export function yamlCompletionSource(getCtx: () => EditorContext) {
       if (key === "shape") options.push(...shaperNames.map((s) => completion(s, "function", "shaper")))
       if (["macro", "call"].includes(key) && g) options.push(...g.macros.map((m) => completion(m, "function", "macro")))
       const parent = yc.path[yc.path.length - 1]
+      if (g && key === "ref" && ["script", "evaluate"].includes(String(parent))) options.push(...(g.scripts ?? []).map(name => completion(name, "variable", "shared script", name, 3)))
       const requestNames = Object.keys(g?.requests ?? {})
       // fetch: {request: …} · condition request: {name: …} · fetch into
       if (g && (key === "request" || (key === "name" && parent === "request"))) options.push(...requestNames.map((r) => completion(r, "variable", "request", r, 3)))

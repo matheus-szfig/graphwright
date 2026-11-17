@@ -45,7 +45,7 @@ engine/
 | --- | --- |
 | Install / update deps | `uv sync` |
 | Tests (no services, no browser) | `uv run pytest` |
-| Tests incl. real Chromium + demo-site e2e | `GW_BROWSER_TESTS=1 uv run pytest` (`make test-engine-browser`) |
+| Tests incl. real Chromium + demo-site e2e | `GW_BROWSER_TESTS=1 uv run pytest` (`make engine:test-browser`) |
 | Lint code / graphs | `uv run ruff check` · `uv run graphwright lint` |
 | Step a graph in a headed browser | `uv run graphwright step acme_record_search --input base_url=http://127.0.0.1:8090 --headed` |
 | Debug one graph request | `uv run graphwright request-test acme_login_relay_otp otp --input base_url=http://127.0.0.1:8090` |
@@ -197,3 +197,17 @@ either `condition` or `target` + `state` (visible, hidden, enabled, disabled, cl
 observer; model requests are ordinary graph HTTP, with no built-in model selection.
 Tests cover clipped expanding menus, image capture/freshness/redaction and isolated
 runtime execution with host imports blocked. See docs/engine-yaml for examples.
+
+## Shared scripts, resync and page inventory (D-39 – D-41)
+
+- `workflow.scripts` holds reusable JavaScript; `script.ref` / `evaluate.ref` name it.
+  Always read code through `Workflow.script_source(spec)`, never `spec.code` directly.
+- `resync` defaults to `disabled`: a recognition miss raises `RecognitionFailed` (and
+  follows `on_fail`). `resync: global` opts back into declaration-order recovery.
+- The observer records categorized elements across frames and open shadow roots,
+  plus `hidden_elements` (values omitted) that never take part in visible matching.
+  `observation.max_elements` bounds collection; `page_filter` is builder display only.
+- `type: secure` marks secret inputs (`password` is a legacy alias); use
+  `is_secure_input` / `is_private_input` from `engine/secrets.py`.
+- `GraphSession.run(on_step=...)` calls a synchronous boundary hook between steps
+  (the builder activates reviewed patches there); returning False pauses the run.

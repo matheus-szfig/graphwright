@@ -44,6 +44,8 @@ graphwright/
 - **Builder loop (local only)**: `builder-api` wraps `GraphSession` with a headed
   browser; `builder-web` steps graphs, tests requests, and writes YAML back into
   `engine/graphs/` — the repo is the graph store.
+  Its AI assistant (`builder-api/src/builder_api/ai/`) calls OpenAI/Anthropic from the
+  builder API only; provider code never enters the engine, worker or runs API (D-43).
 
 Dependency direction is strict: `api → engine` and `builder-api → engine` (editable path
 dependencies), never the reverse. The API imports only `graphwright.contract` /
@@ -54,10 +56,10 @@ the API or the builder.
 
 ```bash
 make setup          # env files + uv sync / npm ci everywhere
-make up             # docker compose up -d --build → http://localhost:8080 (API docs at /api/docs)
-make demo           # run every example graph against demo-site through the API
-make watch          # hot-reload loop
-make builder-local  # the builder on the host, headed browser → http://localhost:5174/builder/
+make stack:up       # docker compose up -d --build → http://localhost:8080 (API docs at /api/docs)
+make demo:run       # run every example graph against demo-site through the API
+make stack:watch    # hot-reload loop
+make builder:local  # the builder on the host, headed browser → http://localhost:5174/builder/
 make check          # lint + typecheck + tests (what CI runs, minus browser/DB jobs)
 ```
 
@@ -76,6 +78,9 @@ make check          # lint + typecheck + tests (what CI runs, minus browser/DB j
 - **Credentials never live in graphs, messages, logs or `run.inputs`** (D-06, D-23, D-26).
 - **Make targets are thin shells over stdlib Python scripts** (D-22) — they must work under
   `sh` and native Windows `make`.
+- **Make targets are named `silo:action`** (`builder:local`, `engine:test`, `stack:up`;
+  D-45). Escape the colon in the rule name (`builder\:local:`); cross-silo aggregates
+  (`setup`, `install`, `test`, `lint`, `check`) stay bare and call `"$(MAKE)"` with the goals.
 - **All Postgres migrations live in `api/alembic`.** A column the worker writes needs a
   grant for `graphwright_worker` in the same revision.
 - **DB tests only run against a database whose name ends in `_test`** (D-33).

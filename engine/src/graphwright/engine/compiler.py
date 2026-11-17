@@ -264,6 +264,15 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
         if spec.credential and spec.default is not None:
             errors.append(f"input {iname!r}: a credential input cannot have a default")
     _lint_requests(wf, errors)
+    if wf.scripts:
+        from graphwright.engine.sandbox import syntax_error
+
+        for script_name, source in wf.scripts.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", script_name):
+                errors.append(f"scripts: invalid name {script_name!r}")
+            err = syntax_error(source, is_async=True)
+            if err:
+                errors.append(f"scripts.{script_name}: does not compile: {err}")
 
     for name, node in nodes.items():
         for t in node.transitions:
@@ -298,6 +307,7 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
                     errors.append(
                         f"{name}: action #{i} fills {a.fill.target!r} with a literal value — credentials and "
                         f"personal data must come from inputs, e.g. value: \"{{{_input_name_for(a.fill.target)}}}\""
+                        f"; if this fixed value is intentional and not a secret, set literal: true on the fill"
                     )
             if a.jump and a.jump.to not in nodes:
                 errors.append(f"{name}: action #{i} jumps to unknown node {a.jump.to!r}")
@@ -308,8 +318,11 @@ def lint(wf: Workflow, *, macros: Iterable[str] = ()) -> list[str]:
             if a.script or a.evaluate:
                 from graphwright.engine.sandbox import syntax_error
 
-                body = a.script.code if a.script else a.evaluate.script
-                err = syntax_error(body, is_async=bool(a.evaluate))
+                try:
+                    body = wf.script_source(a.script or a.evaluate)
+                    err = syntax_error(body, is_async=bool(a.evaluate))
+                except ValueError as exc:
+                    err = str(exc)
                 if err:
                     errors.append(f"{name}: action #{i} ({a.verb}) does not compile: {err}")
                 code_spec = a.script or a.evaluate

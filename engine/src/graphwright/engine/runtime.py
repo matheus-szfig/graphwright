@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -35,6 +36,7 @@ from graphwright.engine.errors import (
     LoopGuard,
     NoTransition,
     PostconditionFailed,
+    RecognitionFailed,
     TransientError,
     UnknownState,
 )
@@ -82,7 +84,8 @@ class GraphSession:
     ) -> None:
         self.graph = graph
         self.page = page
-        self.observer = observer or Observer(page)
+        self.observer = observer or Observer(page, max_elements=graph.workflow.observation.max_elements)
+        self._owns_observer = observer is None
         self.human = Humanizer(page, budget or StealthBudget.for_risk(graph.workflow.risk))
         self.inputs = inputs
         # callable(obj) -> obj with known plaintext secrets masked; applied to
@@ -178,6 +181,8 @@ class GraphSession:
         """Builder: swap the graph (after lint) and keep position if the node still exists."""
         new_graph = compile_workflow(workflow)
         self.graph = new_graph
+        if self._owns_observer:
+            self.observer.set_max_elements(workflow.observation.max_elements)
         self.requests.specs = workflow.requests
         self.requests.results = {k: v for k, v in self.requests.results.items() if k in workflow.requests}
         if self.node not in new_graph.nodes:
@@ -213,15 +218,22 @@ class GraphSession:
 
             state = await self._observe()
 
-            # 1. recognize — else re-sync to whichever node recognizes the page
+            # 1. Recognition guards the expected node. Global recovery is opt-in.
             m = node.recognize(state, self.vars, self.requests.statuses)
             self._emit("recognize", ok=m.ok, reasons=m.reasons)
             if not m.ok:
+                if self.workflow.resync == "disabled":
+                    raise RecognitionFailed(
+                        f"node {node.name!r} did not recognize page {state.route!r}; "
+                        "its actions were not run. Global resync is disabled.",
+                        details=[f"{node.name}: {reason}" for reason in m.reasons],
+                    )
                 winner, all_matches = self.graph.resync(state, self.vars, requests=self.requests.statuses)
                 self._emit("resync", winner=winner, matches={k: v.ok for k, v in all_matches.items()})
                 if winner is None:
                     raise UnknownState(
-                        f"page {state.route!r} matches no node",
+                        f"node {node.name!r} did not recognize page {state.route!r}; "
+                        "global resync found no matching node. Its actions were not run.",
                         details=[f"{k}: {'; '.join(v.reasons)}" for k, v in all_matches.items()],
                     )
                 return self._move(winner, node, start_idx)
@@ -294,7 +306,8 @@ class GraphSession:
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 raise NoTransition(
-                    f"no transition matched on {self.node!r} within {node.spec.timeout_s}s",
+                    f"actions completed on node {self.node!r}, but none of its outgoing transitions "
+                    f"matched within {node.spec.timeout_s}s (page {state.route!r})",
                     details=last_decision.explain(),
                 )
             await self.observer.wait_for_change(state.signature or "", min(remaining, 2.0))
@@ -333,11 +346,19 @@ class GraphSession:
         self._emit("failure", **self.failure)
         return StepResult(self.node, None, self.status, self.last_state, self.events[start_idx:])
 
-    async def run(self, *, max_steps: int | None = None) -> StepResult:
+    async def run(self, *, max_steps: int | None = None, on_step: Callable[[], bool] | None = None) -> StepResult:
+        """Run steps; an optional synchronous boundary callback may return False to pause.
+
+        The builder uses this to activate reviewed graph patches between steps.
+        The callback never runs inside a node's actions or transition wait.
+        """
         result = None
         for _ in range(max_steps or self._max_total_steps):
             result = await self.step()
+            if on_step is not None and on_step() is False:
+                break
             if result.status in ("done", "failed", "needs_repair"):
                 break
+            await asyncio.sleep(0)
         assert result is not None
         return result

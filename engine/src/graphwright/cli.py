@@ -263,7 +263,7 @@ async def _script_test(args: argparse.Namespace) -> int:
         return 2
     spec = scripts[args.index]
     credential = get_provider().redeem(args.credential, run_id="cli") if args.credential else None
-    report = await run_script(wf, spec.code, args=spec.args, inputs=_kv(args.input), variables=_json_kv(args.var),
+    report = await run_script(wf, wf.script_source(spec), args=spec.args, inputs=_kv(args.input), variables=_json_kv(args.var),
                               credential=credential, into=spec.into, timeout_ms=spec.timeout_ms, memory_mb=spec.memory_mb,
                               allow_secrets=spec.allow_secrets)
     _out(json.dumps(report, indent=2, ensure_ascii=False, default=str))

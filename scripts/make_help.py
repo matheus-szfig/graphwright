@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = re.compile(r"^([a-zA-Z_-]+):.*?## (.*)$")
+# Targets are named silo:action; the Makefile escapes the colon (`builder\:local:`).
+TARGET = re.compile(r"^((?:[a-zA-Z_-]|\\:)+):.*?## (.*)$")
 SECTION = re.compile(r"^# --- (.+?) -+$")
 
 
@@ -24,7 +25,7 @@ def main() -> int:
         m = TARGET.match(line)
         if not m:
             continue
-        name = f"{m[1]:<22}"
+        name = f"{m[1].replace(chr(92), ''):<22}"
         print(f"  \033[36m{name}\033[0m {m[2]}" if color else f"  {name} {m[2]}")
     return 0
 

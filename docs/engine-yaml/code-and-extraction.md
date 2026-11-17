@@ -7,6 +7,40 @@ Use `extract` for structured page data, `script` for computation over data, and
 The builder's **code** node is an ordinary node initialized with a script action; it is
 not a separate `kind` in the workflow schema.
 
+## Shared JavaScript sources
+
+For long JavaScript bodies, use the shared `scripts` map at the workflow root:
+
+```yaml
+scripts:
+  extract_heading: |
+    return {title: document.querySelector(args.selector)?.textContent?.trim() ?? null};
+nodes:
+  extract_page:
+    recognize: {url: 're:/details'}
+    actions:
+      - evaluate:
+          ref: extract_heading
+          args: {selector: h1}
+          into: page_data
+          timeout_ms: 30000
+    transitions: [{to: done}]
+  done:
+    terminal: success
+```
+
+This is a fragment; keep the workflow's `workflow`, `portal` and `start` fields.
+Use `script: {ref: name, ...}` for sandbox computation instead. Supply exactly one
+of the inline source (`script.code` or `evaluate.script`) and `ref`. References
+resolve only inside this graph; they do not load files or URLs. Use identifier
+names such as `extract_record_page`. Lint checks missing references and syntax.
+
+Keep arguments, output variable and execution options on the action. Moving source
+does not change its browser access, secret handling or execution limits. Edit the
+shared body in **Graph YAML**; the **Code** tab resolves it for preview/testing and
+shows its `scripts.name` origin. Patch a running session after saving source changes.
+The YAML writer preserves multiline source as literal blocks.
+
 ## Extract fields and tables
 
 ```yaml

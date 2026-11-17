@@ -5,8 +5,10 @@ import { bracketMatching, indentOnInput } from "@codemirror/language"
 import { EditorState } from "@codemirror/state"
 import { oneDark } from "@codemirror/theme-one-dark"
 import { EditorView, keymap, lineNumbers } from "@codemirror/view"
+import { editorState, rememberEditor, restoreScroll } from "./memory"
 
 export interface CodeEditorProps {
+  memoryKey?: string
   value: string
   onChange?: (value: string) => void
   /** Ctrl/Cmd+Enter — the console's "run". */
@@ -17,7 +19,7 @@ export interface CodeEditorProps {
 
 /** CodeMirror for JavaScript (code-node bodies, in-page scripts, the console). Built
  * once; `value` changes from outside replace the document without counting as edits. */
-export function CodeEditor({ value, onChange, onSubmit, readOnly = false, className }: CodeEditorProps) {
+export function CodeEditor({ value, onChange, onSubmit, readOnly = false, className, memoryKey }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
@@ -28,7 +30,7 @@ export function CodeEditor({ value, onChange, onSubmit, readOnly = false, classN
 
   useEffect(() => {
     if (!host.current) return
-    const state = EditorState.create({
+    const state = editorState(memoryKey, {
       doc: value,
       extensions: [
         lineNumbers(),
@@ -52,7 +54,9 @@ export function CodeEditor({ value, onChange, onSubmit, readOnly = false, classN
       ],
     })
     view.current = new EditorView({ state, parent: host.current })
+    restoreScroll(memoryKey, view.current)
     return () => {
+      if (view.current) rememberEditor(memoryKey, view.current)
       view.current?.destroy()
       view.current = null
     }

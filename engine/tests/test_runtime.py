@@ -190,6 +190,7 @@ async def test_required_extract_value_missing_is_structural(search_graph) -> Non
 
 
 async def test_resync_when_the_page_is_not_the_expected_node(search_graph) -> None:
+    search_graph.workflow.resync = "global"
     session, _, _ = search_session(search_graph, [golden("acme_record_detail")])
 
     first = await session.step()
@@ -200,6 +201,7 @@ async def test_resync_when_the_page_is_not_the_expected_node(search_graph) -> No
 
 
 async def test_unknown_page_stops_in_needs_repair_with_evidence(search_graph) -> None:
+    search_graph.workflow.resync = "global"
     unknown = golden("acme_search_form").model_copy(update={
         "url": "http://demo-site:8090/error", "route": "/error", "elements": [], "alerts": ["Internal error"],
     })
@@ -209,6 +211,52 @@ async def test_unknown_page_stops_in_needs_repair_with_evidence(search_graph) ->
     assert result.status == "needs_repair"
     assert session.failure["type"] == "UnknownState" and session.failure["class"] == "structural"
     assert any(line.startswith("search_form:") for line in session.failure["details"])
+
+
+@pytest.mark.parametrize("on_fail", ["repair", "fail", "recovery"])
+async def test_recognition_failure_does_not_jump_to_a_matching_node(on_fail) -> None:
+    wf = Workflow.from_yaml_text(f"""
+workflow: strict_routes
+portal: test
+start: expected
+nodes:
+  expected:
+    recognize: {{url: /expected}}
+    on_fail: {on_fail}
+    actions: [{{press: {{key: Enter}}}}]
+    transitions: [{{to: done}}]
+  done: {{terminal: success}}
+""" + ("""
+  recovery:
+    recognize: {always: true}
+    transitions: [{to: done}]
+""" if on_fail == "recovery" else ""))
+    # A broad matching node elsewhere must never steal execution, including when
+    # reachable from a different node rather than the current node's transitions.
+    from graphwright.engine.schema import Node
+
+    wf.nodes["other"] = Node(recognize={"always": True}, transitions=[Transition(to="done")])
+    wf.nodes["bridge"] = Node(recognize={"always": True}, transitions=[Transition(to="other")])
+    wf.nodes["expected"].transitions.append(Transition(to="bridge", when={"always": False}))
+    page = fake_page()
+    state = PageState(url="https://test/unexpected", portal="test", route="/unexpected")
+    session = GraphSession(compile_workflow(wf), page, {}, observer=FakeObserver([state]), budget=FAST)
+
+    result = await session.step()
+
+    assert not any(e.kind == "resync" for e in session.events)
+    page.keyboard.press.assert_not_awaited()
+    if on_fail == "recovery":
+        assert result.next_node == "recovery"
+        error = session.vars["_error"]
+    else:
+        assert result.next_node is None and session.node == "expected"
+        assert result.status == ("failed" if on_fail == "fail" else "needs_repair")
+        error = session.failure
+    assert error["type"] == "RecognitionFailed"
+    assert "actions were not run" in error["message"]
+    assert "Global resync is disabled" in error["message"]
+    assert any("expected:" in reason for reason in error["details"])
 
 
 async def test_no_transition_times_out_with_the_trace(search_graph) -> None:

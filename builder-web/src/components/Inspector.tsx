@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useDraft, useWip } from "@/workspace"
 
 import {
   api,
@@ -11,12 +12,13 @@ import {
   type RequestCall,
   type SchemaBundle,
   type SessionSummary,
-  type TargetReport,
 } from "@/api"
-import { useDialog } from "./dialog"
+import { TargetsPanel } from "./TargetsPanel"
 import { CodePanel } from "./CodePanel"
+import { useDialog } from "./dialog"
 import { RequestCallView, RequestsPanel } from "./RequestsPanel"
-import { Badge } from "./ui"
+import { Badge, Icon } from "./ui"
+import { usePageFilters } from "./PageFilters"
 import { EventLogTools, EventWithCopy } from "./EventTools"
 import { YamlEditor } from "@/editor/YamlEditor"
 import type { EditorContext, SchemaBundle as EditorSchema } from "@/editor/completions"
@@ -29,6 +31,7 @@ export interface InspectorProps {
   sessionId?: string
   session: SessionSummary | null
   values: Record<string, string>
+  /** Credential reference for request/code tests (the API's provider resolves it). */
   credential: string
   events: BuilderEvent[]
   page: { render: string; state: PageState } | null
@@ -37,9 +40,14 @@ export interface InspectorProps {
   onGraphChanged: (v: GraphView) => void
   onError: (msg: string, errors?: string[]) => void
   onNotice: (msg: string) => void
+  /** Force a fresh observation of the live page (re-detect elements) without
+   *  running a node. No-op until a session exists. */
+  onObserve?: () => void
+  busy?: boolean
 }
 
 export function Inspector(p: InspectorProps) {
+  const wip = useWip(p.view.name)
   const [tab, setTab] = useState<Tab>("node")
   useEffect(() => {
     if (p.selected) setTab("node")
@@ -51,10 +59,10 @@ export function Inspector(p: InspectorProps) {
     graph: p.completions,
     page: p.page?.state ?? null,
   })
-
   const requestCount = Object.keys(p.view.workflow.requests ?? {}).length
   const codeCount = Object.values(p.view.workflow.nodes).reduce(
     (n, node) => n + (node.actions ?? []).filter((a) => "script" in a || "evaluate" in a).length, 0)
+
   const tabs: [Tab, string][] = [
     ["node", "Node"],
     ["graph", "Graph YAML"],
@@ -66,25 +74,32 @@ export function Inspector(p: InspectorProps) {
     ["shot", "Screenshot"],
   ]
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex gap-4 border-b border-outline-variant px-3">
+    <div className="flex h-full flex-col overflow-y-auto">
+      <div className="flex shrink-0 gap-4 overflow-x-auto overflow-y-hidden border-b border-outline-variant px-3" role="tablist">
         {tabs.map(([k, label]) => (
           <button
             key={k}
+            role="tab"
+            aria-selected={tab === k}
             onClick={() => setTab(k)}
-            className={`-mb-px border-b-2 py-2.5 text-[13px] font-medium transition-colors ${tab === k ? "border-primary-soft text-primary-soft" : "border-transparent text-muted hover:text-on-surface"}`}
+            className={`shrink-0 whitespace-nowrap border-b-2 py-2.5 text-[13px] font-medium transition-colors ${tab === k ? "border-primary-soft text-primary-soft" : "border-transparent text-muted hover:text-on-surface"}`}
           >
             {label}
+            {wip.has(k) && <span className="ml-1"><Badge tone="warning" title="Unsaved work in this tab">WIP</Badge></span>}
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === "node" && <NodeEditor {...p} editorCtx={editorCtx("node")} />}
-        {tab === "graph" && <GraphEditor {...p} editorCtx={editorCtx("workflow")} />}
+      <div className="min-h-24 flex-1 overflow-auto p-3">
+        {p.view.lint.length > 0 && <details className="mb-3 rounded border border-warning/40 bg-warning/10 p-2 text-xs text-warning">
+          <summary className="cursor-pointer">Saved graph has {p.view.lint.length} error(s). Execution disabled; edits can still be saved.</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-4">{p.view.lint.map((error, i) => <li key={i}>{error}</li>)}</ul>
+        </details>}
+        {tab === "node" && <NodeEditor key={`${p.view.name}:${p.selected}`} {...p} editorCtx={editorCtx("node")} />}
+        {tab === "graph" && <GraphEditor key={p.view.name} {...p} editorCtx={editorCtx("workflow")} />}
         {tab === "code" && <CodePanel view={p.view} selected={p.selected} session={p.session?.status === "stopped" ? null : p.session} values={p.values} credential={p.credential} onError={p.onError} />}
         {tab === "requests" && <RequestsPanel view={p.view} session={p.session?.status === "stopped" ? null : p.session} values={p.values} credential={p.credential} onError={p.onError} />}
-        {tab === "page" && <PageView {...p} />}
-        {tab === "targets" && <TargetsView sessionId={p.sessionId} view={p.view} events={p.events} />}
+        {tab === "page" && <PageView key={p.view.name} {...p} />}
+        {tab === "targets" && <TargetsPanel key={p.view.name} {...p} />}
         {tab === "events" && <EventsView events={p.events} graph={p.view.name} runId={p.session?.id} />}
         {tab === "shot" && <Screenshot sessionId={p.sessionId} events={p.events} />}
       </div>
@@ -95,7 +110,7 @@ export function Inspector(p: InspectorProps) {
 function Hint() {
   return (
     <span className="text-[11px] text-faint">
-      <kbd className="rounded border border-outline-variant px-1">Tab</kbd> accepts a suggestion · <kbd className="rounded border border-outline-variant px-1">Ctrl</kbd>+<kbd className="rounded border border-outline-variant px-1">Space</kbd> opens it
+      <kbd className="rounded border border-outline-variant px-1">Tab</kbd> accepts a suggestion · <kbd className="rounded border border-outline-variant px-1">Ctrl</kbd>+<kbd className="rounded border border-outline-variant px-1">Space</kbd> opens it · <kbd className="rounded border border-outline-variant px-1">⌘/Ctrl</kbd>+<kbd className="rounded border border-outline-variant px-1">S</kbd> saves
       {" "}· suggestions include what the live page shows (ids, roles, names, route)
     </span>
   )
@@ -182,7 +197,7 @@ function useDebouncedLint(run: (text: string) => Promise<string[]>, text: string
         })
         .catch((e: ApiError) => {
           if (seq.current !== id) return
-          const reason = e.status === 404 ? "endpoint missing — restart the API (make builder-local)" : e.message
+          const reason = e.status === 404 ? "endpoint missing — restart the API (make builder:local)" : e.message
           setLint({ status: "unavailable", reason })
         })
     }, 400)
@@ -194,24 +209,30 @@ function useDebouncedLint(run: (text: string) => Promise<string[]>, text: string
 // --- Node editor -------------------------------------------------------------------------------
 
 function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
-  const [yaml, setYaml] = useState("")
-  const [dirty, setDirty] = useState(false)
+  const draft = useDraft(p.view.name, "node", p.selected ?? "", null)
+  const { text: yaml, edit: setYaml, dirty, receive } = draft
   const [newName, setNewName] = useState("")
+  // Kept current every render so the ⌘/Ctrl+S listener (bound once) always saves
+  // the latest text under the latest conditions.
+  const saveRef = useRef<() => void>(() => {})
   const node = p.selected
   const isTerminal = !!(node && p.view.workflow.nodes[node]?.terminal)
 
   useEffect(() => {
     if (!node) return
+    let current = true
     setNewName(node)
     api.graphs
       .node(p.view.name, node)
       .then((r) => {
-        setYaml(r.yaml)
-        setDirty(false)
+        if (current) receive(r.yaml)
       })
-      .catch((e: ApiError) => p.onError(e.message, e.errors))
+      .catch((e: ApiError) => { if (current) p.onError(e.message, e.errors) })
+    return () => { current = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, p.view])
+
+  useSaveShortcut(saveRef)
 
   const lint = useDebouncedLint(
     (text) => (node ? api.graphs.lintNode(p.view.name, node, text).then((r) => r.errors) : Promise.resolve([])),
@@ -222,6 +243,7 @@ function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
   if (!node) {
     return <p className="text-sm text-muted">Select a node on the canvas to edit it. Drag between handles to add a transition; Delete removes nodes or edges.</p>
   }
+  if (draft.base === null) return <p className="text-sm text-muted">Loading node YAML…</p>
   const isStart = p.view.workflow.start === node
   const wrap = async (fn: () => Promise<GraphView>, notice?: string) => {
     try {
@@ -235,7 +257,7 @@ function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
   // rewrite this node's fill to use the template. The node is left dirty for you to save.
   const fixInput = async (fix: { input: string; target?: string }) => {
     if (!p.view.workflow.inputs[fix.input]) {
-      const type = PASSWORD_LIKE.test(fix.input) ? "password" : OTP_LIKE.test(fix.input) ? "otp" : EMAIL_LIKE.test(fix.input) ? "email" : "string"
+      const type = PASSWORD_LIKE.test(fix.input) ? "secure" : OTP_LIKE.test(fix.input) ? "otp" : EMAIL_LIKE.test(fix.input) ? "email" : "string"
       try {
         p.onGraphChanged(await api.graphs.putInput(p.view.name, fix.input, { type, pii: true }))
       } catch (e) {
@@ -247,14 +269,26 @@ function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
       const next = templateFillValue(yaml, fix.target, fix.input)
       if (next !== yaml) {
         setYaml(next)
-        setDirty(true)
       }
     }
-    p.onNotice(`input {${fix.input}} declared (pii) — fill it in the Inputs panel before you start`)
+    p.onNotice(`input {${fix.input}} declared (pii) — fill it in the session bar when you start`)
   }
 
+  const canSave = dirty
+  const save = async () => {
+    if (!canSave) return
+    try {
+      const view = await api.graphs.putNode(p.view.name, node, yaml)
+      draft.commit(yaml)
+      p.onGraphChanged(view)
+    } catch (e) {
+      p.onError((e as ApiError).message, (e as ApiError).errors)
+    }
+  }
+  saveRef.current = save
+
   return (
-    <div className="flex h-full flex-col gap-2">
+    <div className="flex h-full min-h-64 flex-col gap-2">
       <div className="flex items-center gap-2">
         <input
           className="mono flex-1 rounded border border-outline-variant bg-surface px-2 py-1 text-sm"
@@ -280,23 +314,26 @@ function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
         )}
       </div>
       <YamlEditor
+        memoryKey={draft.key}
         className="flex-1"
         value={yaml}
         context={p.editorCtx}
         onChange={(v) => {
           setYaml(v)
-          setDirty(true)
         }}
       />
       <LintBox lint={lint} onFixInput={fixInput} />
+      {draft.conflict && <p className="text-xs text-warning">The saved node changed while this draft was open. Review before saving; saving replaces the saved node.</p>}
       <div className="flex items-center justify-between gap-2">
         <Hint />
         <div className="flex items-center gap-2">
           <span className="text-xs text-faint">{dirty ? "unsaved" : "saved"}</span>
+          {dirty && <button className="text-xs text-muted hover:text-on-surface" onClick={draft.discard}>Discard draft</button>}
           <button
             className="whitespace-nowrap rounded bg-primary px-3 py-1 text-xs font-medium text-white hover:brightness-110 disabled:opacity-40"
-            disabled={!dirty || lint.status === "errors" || lint.status === "checking"}
-            onClick={() => wrap(() => api.graphs.putNode(p.view.name, node, yaml)).then(() => setDirty(false))}
+            disabled={!canSave}
+            onClick={save}
+            title="Save node (⌘/Ctrl+S)"
           >
             Save node
           </button>
@@ -309,37 +346,44 @@ function NodeEditor(p: InspectorProps & { editorCtx: EditorContext }) {
 // --- whole-graph YAML --------------------------------------------------------------------------
 
 function GraphEditor(p: InspectorProps & { editorCtx: EditorContext }) {
-  const [yaml, setYaml] = useState(p.view.yaml)
-  const [dirty, setDirty] = useState(false)
+  const draft = useDraft(p.view.name, "graph", "yaml", p.view.yaml)
+  const { text: yaml, edit: setYaml, dirty, receive } = draft
+  const saveRef = useRef<() => void>(() => {})
   useEffect(() => {
-    setYaml(p.view.yaml)
-    setDirty(false)
-  }, [p.view])
+    receive(p.view.yaml)
+  }, [p.view.yaml, receive])
   const lint = useDebouncedLint((text) => api.graphs.lint(p.view.name, text).then((r) => r.errors), yaml, dirty)
+  useSaveShortcut(saveRef)
 
+  const canSave = dirty
   const save = async () => {
+    if (!canSave) return
     try {
-      p.onGraphChanged(await api.graphs.putYaml(p.view.name, yaml))
-      setDirty(false)
+      const view = await api.graphs.putYaml(p.view.name, yaml)
+      draft.commit(yaml, view.yaml)
+      p.onGraphChanged(view)
     } catch (e) {
       p.onError((e as ApiError).message, (e as ApiError).errors)
     }
   }
+  saveRef.current = () => void save()
   return (
-    <div className="flex h-full flex-col gap-2">
+    <div className="flex h-full min-h-64 flex-col gap-2">
       <YamlEditor
+        memoryKey={draft.key}
         className="flex-1"
         value={yaml}
         context={p.editorCtx}
         onChange={(v) => {
           setYaml(v)
-          setDirty(true)
         }}
       />
       <LintBox lint={lint} />
+      {draft.conflict && <p className="text-xs text-warning">The saved graph changed while this draft was open. Review before saving; saving replaces the saved graph.</p>}
       <div className="flex items-center justify-between gap-2">
         <Hint />
-        <button className="whitespace-nowrap rounded bg-primary px-3 py-1 text-xs font-medium text-white hover:brightness-110 disabled:opacity-40" disabled={!dirty || lint.status === "errors" || lint.status === "checking"} onClick={save}>
+        {dirty && <button className="text-xs text-muted hover:text-on-surface" onClick={draft.discard}>Discard draft</button>}
+        <button className="whitespace-nowrap rounded bg-primary px-3 py-1 text-xs font-medium text-white hover:brightness-110 disabled:opacity-40" disabled={!canSave} onClick={save} title="Save graph (⌘/Ctrl+S)">
           Save graph
         </button>
       </div>
@@ -347,13 +391,42 @@ function GraphEditor(p: InspectorProps & { editorCtx: EditorContext }) {
   )
 }
 
+/** ⌘/Ctrl+S saves the active editor (node or graph). Bound once; the ref holds
+ *  the latest save closure, which no-ops when there's nothing changed to save. The
+ *  node and graph editors never mount at the same time, so only one fires. */
+function useSaveShortcut(saveRef: { current: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "s" || e.key === "S")) {
+        e.preventDefault()
+        saveRef.current()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [saveRef])
+}
+
 // --- PageState ---------------------------------------------------------------------------------
 
 function PageView(p: InspectorProps) {
   const [raw, setRaw] = useState(true)
+  const [limit, setLimit] = useState(100)
+  const { elements, controls } = usePageFilters(p)
   const dialog = useDialog()
   const page = p.page
-  if (!page) return <p className="text-sm text-muted">No observation yet — start a session.</p>
+  if (!page)
+    return (
+      <div className="space-y-3">
+        {controls}
+        <p className="text-sm text-muted">
+          {p.sessionId
+            ? "No elements detected yet — the page may still be loading. Detect now:"
+            : "No observation yet — start a session."}
+        </p>
+        {p.sessionId && <DetectButton onObserve={p.onObserve} busy={p.busy} />}
+      </div>
+    )
   const s = page.state
 
   const addTarget = async (e: PageElement) => {
@@ -376,7 +449,9 @@ function PageView(p: InspectorProps) {
     try {
       const r = await api.graphs.targetFromElement(p.view.name, e, name)
       p.onGraphChanged(r.view)
-      p.onNotice(`target "${r.target}" added:\n${r.yaml}`)
+      p.onNotice(`target "${r.target}" added:\n${r.yaml}` + (e.role === "img"
+        ? `\nCapture this image in a node:\n- capture_image: {target: ${r.target}, into: captcha}\nUse {vars.captcha.data_url} in an HTTP request to your vision service.`
+        : ""))
     } catch (err) {
       p.onError((err as ApiError).message, (err as ApiError).errors)
     }
@@ -388,56 +463,70 @@ function PageView(p: InspectorProps) {
         <span>
           <b className="text-on-surface">{s.portal}</b> {s.route}
         </span>
-        <span>{s.stats.kept}/{s.stats.candidates} elements</span>
+        <span>{s.elements.length} visible · {s.hidden_elements?.length ?? 0} hidden</span>
         <span>{s.stats.frames} frame(s)</span>
         <span>{s.stats.total_ms} ms</span>
         <button className="text-primary-soft hover:underline" onClick={() => setRaw(!raw)}>
           {raw ? "show render" : "show elements table"}
         </button>
+        <span className="ml-auto">
+          <DetectButton onObserve={p.onObserve} busy={p.busy} label="Re-detect" />
+        </span>
       </div>
+      {controls}
+      {!!s.stats.truncated && <p className="text-warning">{s.stats.truncated} elements exceeded the observation limit. Increase observation.max_elements in Graph YAML (up to 20,000 per frame and visibility group), then Patch and Re-detect.</p>}
+      {!elements.length && <p className="text-muted">No elements match these filters. Use Show everything to inspect the full inventory.</p>}
       {!raw ? (
-        <pre className="mono whitespace-pre-wrap rounded border border-outline-variant bg-recess p-2 leading-5">{page.render}</pre>
+        <pre className="mono whitespace-pre-wrap rounded border border-outline-variant bg-recess p-2 leading-5">{[
+          `route: ${s.portal} ${s.route}`, `title: ${s.title}`,
+          ...elements.slice(0, limit).map(e => `${e.id} [frame ${e.frame}] ${e.role} <${e.tag}> ${e.dom_id ? `#${e.dom_id} ` : ""}${JSON.stringify(e.name)}${e.value ? ` = ${JSON.stringify(e.value)}` : ""}${e.states.length ? ` [${e.states.join(", ")}]` : ""}${e.nearby.length ? ` near: ${e.nearby.join(" | ")}` : ""}`),
+        ].join("\n")}</pre>
       ) : (
         <table className="mono w-full text-left text-[11px]">
           <thead className="text-muted">
             <tr>
+              <th className="w-10"><span className="sr-only">Add target</span></th>
               <th className="pr-2">id</th>
+              <th className="pr-2">frame</th>
               <th className="pr-2">role</th>
+              <th className="pr-2">tag / states</th>
               <th className="pr-2" title="HTML id attribute — usable as dom_id in strategies and recognize">dom_id</th>
               <th className="pr-2">name</th>
               <th className="pr-2">value</th>
               <th className="pr-2">nearby</th>
               <th className="pr-2">landmark</th>
               <th className="pr-2">vp</th>
-              <th className="w-6" />
             </tr>
           </thead>
           <tbody>
-            {s.elements.map((e) => (
+            {elements.slice(0, limit).map((e) => (
               <tr key={e.id} className="group border-t border-outline-variant align-top hover:bg-surface">
+                <td className="whitespace-nowrap pr-2 py-1">
+                  <button
+                    className="inline-flex h-8 w-8 items-center justify-center rounded border border-outline-variant bg-surface text-primary-soft hover:bg-primary hover:text-on-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                    title={`Create a target for ${e.id} (${e.role} “${e.name || e.nearby[0] || e.dom_id || ""}”)`}
+                    aria-label={`Add element ${e.id} as target`}
+                    onClick={() => addTarget(e)}
+                  >
+                    <Icon name="add" size={22} />
+                  </button>
+                </td>
                 <td className="whitespace-nowrap pr-2 text-primary-soft">{e.id}</td>
+                <td className="pr-2 text-muted">{e.frame}</td>
                 <td className="whitespace-nowrap pr-2">{e.role}</td>
+                <td className="pr-2 text-muted">{e.tag}{e.states.length ? ` · ${e.states.join(", ")}` : ""}</td>
                 <td className="pr-2 text-success">{e.dom_id ?? ""}</td>
                 <td className="pr-2">{e.name}</td>
                 <td className="pr-2 text-muted">{e.value ?? ""}</td>
                 <td className="pr-2 text-muted">{e.nearby.join(" | ")}</td>
                 <td className="pr-2 text-faint">{e.landmark ?? ""}</td>
                 <td className="pr-2">{e.in_viewport ? "•" : ""}</td>
-                <td className="whitespace-nowrap">
-                  <button
-                    className="inline-flex h-5 w-5 items-center justify-center rounded text-faint hover:bg-primary hover:text-white group-hover:text-on-surface-variant"
-                    title={`create a target for ${e.id} (${e.role} “${e.name || e.nearby[0] || e.dom_id || ""}”) — strategies: name → dom_id → nearby`}
-                    aria-label="create target"
-                    onClick={() => addTarget(e)}
-                  >
-                    <TargetIcon />
-                  </button>
-                </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {elements.length > limit && <button className="text-primary-soft hover:underline" onClick={() => setLimit(n => n + 100)}>Show 100 more ({elements.length - limit} remaining)</button>}
     </div>
   )
 }
@@ -455,36 +544,21 @@ function TargetIcon() {
 
 // --- targets -----------------------------------------------------------------------------------
 
-function TargetsView({ sessionId, view, events }: { sessionId?: string; view: GraphView; events: BuilderEvent[] }) {
-  const [report, setReport] = useState<Record<string, TargetReport> | null>(null)
-  useEffect(() => {
-    if (!sessionId) return
-    api.sessions.targets(sessionId).then(setReport).catch(() => setReport(null))
-  }, [sessionId, view, events.length])
-  if (!sessionId) return <p className="text-sm text-muted">Targets resolve against the session's last observation — start one.</p>
-  if (!report) return <p className="text-sm text-muted">Loading…</p>
+/** "Detect elements" — forces a fresh observation of the live page without
+ *  running a node. The page often needs this: the first observation is taken the
+ *  instant the entry URL's DOM loads, before an async login form has rendered. */
+function DetectButton({ onObserve, busy, label = "Detect elements" }: { onObserve?: () => void; busy?: boolean; label?: string }) {
+  if (!onObserve) return null
   return (
-    <div className="space-y-2 text-xs">
-      {Object.entries(report).map(([name, r]) => (
-        <details key={name} className="rounded border border-outline-variant bg-recess p-2" open={!r.ok}>
-          <summary className="cursor-pointer">
-            <span className={`mr-2 inline-block h-2 w-2 rounded-full ${r.ok ? "bg-success" : "bg-danger"}`} />
-            <span className="mono font-semibold">{name}</span>
-            <span className="ml-2 text-muted">{r.description}</span>
-            {r.element && (
-              <span className="mono ml-2 text-primary-soft">
-                → {r.element.id} {r.element.role} “{r.element.name}”
-              </span>
-            )}
-          </summary>
-          <ul className="mono mt-2 space-y-0.5 text-muted">
-            {r.attempts.map((a, i) => (
-              <li key={i}>{a}</li>
-            ))}
-          </ul>
-        </details>
-      ))}
-    </div>
+    <button
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded border border-outline-variant px-2 py-1 text-xs hover:bg-surface-high disabled:opacity-40"
+      disabled={busy}
+      onClick={onObserve}
+      title="Observe the live page now and re-detect elements (no node is run)"
+    >
+      <TargetIcon />
+      {label}
+    </button>
   )
 }
 
@@ -529,7 +603,7 @@ function EventRow({ event: e }: { event: BuilderEvent }) {
           <details key={ts} className="rounded border border-outline-variant bg-recess px-2 py-1" open={kind === "failure"}>
             <summary className="cursor-pointer">
               <span className={EVENT_COLOR[kind] ?? "text-on-surface-variant"}>[{kind}]</span> <span className="text-faint">{node}</span>{" "}
-              <span className="text-muted">{brief.slice(0, 160)}</span>
+              <span className="text-muted">{brief}</span>
             </summary>
             {lines && <pre className="mt-1 whitespace-pre-wrap text-muted">{lines.join("\n")}</pre>}
             {rest.spec ? <pre className="mt-1 text-faint">{JSON.stringify(rest.spec)}</pre> : null}
